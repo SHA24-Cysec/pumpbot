@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
 
 # Endpoint yang diuji, urutan penting (kontrol dulu, kandidat fix belakangan)
 TARGETS = [

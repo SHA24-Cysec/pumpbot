@@ -48,3 +48,15 @@ def test_daily_loss_uses_equity_when_explicitly_enabled():
     assert halted
     assert "3.00%" in reason
     assert "00:00 UTC" in reason
+
+
+def test_runtime_high_risk_has_no_software_cap():
+    risk = RiskManager(Config())
+    assert risk.update_params({"risk_per_trade_pct": 50.0}) == []
+    assert risk.params.risk_per_trade_pct == 50.0
+
+
+def test_runtime_zero_risk_still_rejected():
+    risk = RiskManager(Config())
+    errors = risk.update_params({"risk_per_trade_pct": 0.0})
+    assert any("risk_per_trade_pct" in e for e in errors)

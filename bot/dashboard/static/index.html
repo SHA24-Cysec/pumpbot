@@ -11,14 +11,18 @@
     --blue:#3b82f6; --amber:#f59e0b; --purple:#a78bfa;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text);
-       font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;padding:16px}
-  h1{font-size:20px;font-weight:700;letter-spacing:.5px}
+  html{min-width:0;overflow-x:hidden}
+  body{background:var(--bg);color:var(--text);min-width:0;overflow-x:hidden;
+       font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;
+       padding:clamp(8px,1.4vw,16px)}
+  h1{font-size:clamp(16px,1.6vw,20px);font-weight:700;letter-spacing:.5px;white-space:nowrap}
   h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);
      margin-bottom:8px}
-  .header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
-          padding:12px 16px;background:var(--panel);border:1px solid var(--line);
-          border-radius:10px;margin-bottom:14px}
+  .header{display:flex;align-items:center;gap:clamp(8px,1vw,14px);flex-wrap:wrap;
+          padding:clamp(10px,1.1vw,12px) clamp(10px,1.3vw,16px);
+          background:var(--panel);border:1px solid var(--line);
+          border-radius:10px;margin-bottom:14px;min-width:0}
+  .header>span{min-width:0}
   .badge{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700}
   .badge.testnet{background:#1e3a8a;color:#93c5fd}
   .badge.live{background:#7f1d1d;color:#fca5a5}
@@ -27,32 +31,36 @@
   .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
   .dot.off{background:var(--red)}
   button{background:var(--panel2);color:var(--text);border:1px solid var(--line);
-         padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px}
+         padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;
+         min-height:34px;white-space:nowrap}
   button:hover{border-color:var(--blue)}
   button.danger{border-color:#7f1d1d;color:#fca5a5}
   button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
-         gap:10px;margin-bottom:14px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr));
+         gap:clamp(8px,1vw,10px);margin-bottom:14px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-        padding:12px 14px}
+        padding:clamp(10px,1.1vw,12px) clamp(10px,1.2vw,14px);min-width:0}
   .card .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;
              letter-spacing:.6px}
-  .card .val{font-size:20px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
-  .card .sub{font-size:11px;color:var(--muted);margin-top:2px}
+  .card .val{font-size:clamp(16px,1.8vw,20px);font-weight:700;margin-top:3px;
+             font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+  .card .sub{font-size:11px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
   .pos{color:var(--green)} .neg{color:var(--red)} .mut{color:var(--muted)}
-  .grid{display:grid;grid-template-columns:2fr 1fr;gap:14px}
-  @media(max-width:1100px){.grid{grid-template-columns:1fr}}
+  .grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);
+        gap:14px;align-items:start}
+  .grid>div{min-width:0}
+  @media(max-width:1280px){.grid{grid-template-columns:1fr}}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-         padding:14px;margin-bottom:14px;overflow:auto}
-  table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+         padding:clamp(10px,1.2vw,14px);margin-bottom:14px;overflow:hidden;min-width:0}
+  table{width:100%;min-width:max-content;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
   th{color:var(--muted);text-align:left;font-weight:600;padding:6px 8px;
      border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
   td{padding:6px 8px;border-bottom:1px solid var(--line);
      font-variant-numeric:tabular-nums}
   tr:hover td{background:var(--panel2)}
-  .scroll{max-height:320px;overflow:auto}
+  .scroll{max-height:min(320px,45vh);overflow:auto;-webkit-overflow-scrolling:touch}
   .scorebar{height:6px;background:var(--panel2);border-radius:4px;overflow:hidden;
-            min-width:70px}
+            min-width:60px;flex:1}
   .scorebar>div{height:100%;border-radius:4px}
   .sigrow{display:flex;align-items:center;gap:10px;padding:6px 4px;
           border-bottom:1px solid var(--line);font-size:12.5px}
@@ -76,6 +84,40 @@
   .hint{font-size:11px;color:var(--muted);margin-top:6px}
   .halt{background:#7f1d1d;color:#fecaca;padding:6px 10px;border-radius:8px;
         font-size:12px;margin-top:8px}
+  .evtrow{padding:7px 4px;border-bottom:1px solid var(--line);font-size:12px}
+  .evtrow .meta{display:flex;gap:8px;align-items:center;margin-bottom:2px}
+  .evtrow .lvl{font-size:10px;padding:1px 6px;border-radius:6px;font-weight:700}
+  .evtrow.error .lvl{background:#7f1d1d;color:#fecaca}
+  .evtrow.warning .lvl{background:#78350f;color:#fcd34d}
+  .evtrow.info .lvl{background:#1e3a8a;color:#bfdbfe}
+  .evtmsg{color:var(--text);white-space:normal;word-break:break-word}
+
+  @media(max-width:760px){
+    body{font-size:12px;padding:8px}
+    .header{align-items:flex-start;padding:10px;gap:8px}
+    .header h1{flex:1 1 100%;font-size:16px}
+    #btnPause{width:100%}
+    .cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .card .lbl{font-size:9.5px;letter-spacing:.45px}
+    .card .sub{font-size:10px}
+    .panel{padding:10px}
+    .scroll{max-height:42vh}
+    table{font-size:11px}
+    th,td{padding:5px 6px}
+    canvas{height:170px}
+    .sigrow{display:grid;grid-template-columns:minmax(78px,1fr) 72px minmax(55px,1fr) 36px auto;
+            gap:6px;font-size:11px}
+    .sigrow .sym,.sigrow .pr,.sigrow .sc{min-width:0}
+    .formrow{align-items:flex-start;flex-direction:column}
+    .formrow input{width:100%;max-width:100%}
+    .toast{left:8px;right:8px;bottom:8px}
+  }
+  @media(max-width:480px){
+    .cards{grid-template-columns:1fr}
+    .evtrow .meta{flex-wrap:wrap;gap:5px}
+    .sigrow{grid-template-columns:1fr 68px;align-items:center}
+    .sigrow .scorebar{grid-column:1 / -1}
+  }
 </style>
 </head>
 <body>
@@ -150,6 +192,12 @@
   </div>
 
   <div>
+    <!-- ================= PERINGATAN / EVENT ================= -->
+    <div class="panel">
+      <h2>Peringatan / Event Terbaru</h2>
+      <div class="scroll" id="events"><div class="mut">belum ada event</div></div>
+    </div>
+
     <!-- ================= PANEL SINYAL ================= -->
     <div class="panel">
       <h2>Panel Sinyal <span class="mut" style="text-transform:none">(skor detector)</span></h2>
@@ -190,16 +238,26 @@
 const $ = id => document.getElementById(id);
 const fmt = (v, d=2) => (v===null||v===undefined||isNaN(v)) ? "—" :
   Number(v).toLocaleString("id-ID",{minimumFractionDigits:d,maximumFractionDigits:d});
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({
+  "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;"
+}[c]));
 const pct = (v, d=2) => (v===null||v===undefined||isNaN(v)) ? "—" :
   (v>=0?"+":"") + fmt(v,d) + "%";
 const cls = v => v>0 ? "pos" : (v<0 ? "neg" : "mut");
 const money = v => fmt(v,2);
+const idr = v => {
+  const rate = S && S.idr ? Number(S.idr.rate || 0) : 0;
+  if(!rate || isNaN(rate)) return "";
+  return "≈ Rp" + Number(v * rate).toLocaleString("id-ID",{maximumFractionDigits:0});
+};
+const idrWrap = v => idr(v) ? " (" + idr(v) + ")" : "";
 const ts = ms => ms ? new Date(ms).toLocaleTimeString("id-ID") : "—";
 const tsFull = ms => ms ? new Date(ms).toLocaleString("id-ID") : "—";
 
 let S = null;          // snapshot terakhir
 let paused = false;
 let toastTimer = null;
+const TOP_WARNING_TTL_MS = 30 * 1000;  // banner OCO di atas auto-hilang 30 detik
 
 function toast(msg, ok=true){
   const t = $("toast");
@@ -232,35 +290,56 @@ function render(){
   $("uptime").textContent = "⏱ " + Math.floor(S.uptime_sec/60) + " m " + (S.uptime_sec%60) + " s";
   $("watch").textContent = "👁 " + (S.watchlist?S.watchlist.length:0) + " simbol dipantau";
 
+  const kursAda = S.idr && Number(S.idr.rate || 0) > 0;
+  const kursInfo = kursAda
+    ? "Kurs " + (S.idr.symbol || (b.quote_asset+"IDR")) + " dari " + (S.idr.source || "Binance") +
+      ": Rp" + Number(S.idr.rate).toLocaleString("id-ID",{maximumFractionDigits:0})
+    : "Kurs IDR belum tersedia dari Binance";
+
   $("equity").textContent = money(b.equity) + " " + b.quote_asset;
-  $("ret").innerHTML = "sejak awal: <span class='"+cls(b.total_return_pct)+"'>"+
-                       pct(b.total_return_pct)+"</span> (modal awal "+money(b.start_equity)+")";
+  $("ret").innerHTML = (idr(b.equity) ? idr(b.equity) + " · " : "") +
+    "sejak awal: <span class='"+cls(b.total_return_pct)+"'>"+
+    pct(b.total_return_pct)+"</span> (modal awal "+money(b.start_equity)+")";
+  $("ret").title = kursInfo;
+
   $("free").textContent = money(b.free);
-  $("locked").textContent = "terkunci order: " + money(b.locked);
+  $("locked").textContent = (idr(b.free) ? idr(b.free) + " · " : "") +
+    "terkunci order: " + money(b.locked) + idrWrap(b.locked);
+  $("locked").title = kursInfo;
+
   $("inpos").textContent = money(b.in_positions);
-  $("npos").textContent = S.positions.length + " posisi terbuka";
+  $("npos").textContent = S.positions.length + " posisi terbuka" +
+    (idr(b.in_positions) ? " · " + idr(b.in_positions) : "");
+  $("npos").title = kursInfo;
 
   $("daily").innerHTML = "<span class='"+cls(d.pnl)+"'>"+(d.pnl>=0?"+":"")+money(d.pnl)+"</span>";
-  $("dailylim").textContent = d.enabled
+  $("dailylim").textContent = (idr(d.pnl) ? idr(d.pnl) + " · " : "") + (d.enabled
     ? "batas rugi: -" + fmt(d.loss_limit_pct,1) + "% (reset " + (d.reset_timezone||"UTC") + ")" +
       (d.halted ? " — HALT AKTIF" : "")
-    : "batas rugi harian: nonaktif";
+    : "batas rugi harian: nonaktif");
+  $("dailylim").title = kursInfo;
   $("daily").className = "val " + (d.halted ? "neg" : cls(d.pnl));
 
   $("winrate").textContent = st.total_trades ? fmt(st.win_rate_pct,1)+"%" : "—";
   $("trades").textContent = st.total_trades + " trade (" + st.wins + "W/" + st.losses + "L)";
   $("pf").textContent = st.profit_factor===null ? "—" : st.profit_factor;
-  $("exp").textContent = "expectancy: " + money(st.expectancy);
+  $("exp").textContent = "expectancy: " + money(st.expectancy) + idrWrap(st.expectancy);
+  $("exp").title = kursInfo;
   $("totalpnl").innerHTML = "<span class='"+cls(st.total_pnl)+"'>"+
     (st.total_pnl>=0?"+":"")+money(st.total_pnl)+"</span>";
-  $("best").textContent = "terbaik "+money(st.best_trade)+" / terburuk "+money(st.worst_trade);
+  $("best").textContent = (idr(st.total_pnl) ? idr(st.total_pnl) + " · " : "") +
+    "terbaik "+money(st.best_trade)+idrWrap(st.best_trade)+
+    " / terburuk "+money(st.worst_trade)+idrWrap(st.worst_trade);
+  $("best").title = kursInfo;
   $("mdd").textContent = fmt(st.max_dd_pct,2) + "%";
 
   renderPositions();
   renderHistory();
   renderSignals();
+  renderEvents();
   drawCurve();
   renderHalt();
+  renderOcoWarning();
 }
 
 function renderHalt(){
@@ -275,6 +354,40 @@ function renderHalt(){
   } else if(el){ el.remove(); }
 }
 
+function renderOcoWarning(){
+  let el = document.getElementById("ocowarn");
+  const events = S.events || [];
+  const latest = events.find(e => String(e.type||"").includes("OCO"));
+  const fresh = latest && latest.ts && (Date.now() - latest.ts < TOP_WARNING_TTL_MS);
+  if(fresh){
+    if(!el){
+      el = document.createElement("div");
+      el.id = "ocowarn"; el.className = "halt";
+      document.querySelector(".header").after(el);
+    }
+    el.textContent = "⚠️ OCO: " + (latest.message || latest.type || "OCO warning");
+  } else if(el){ el.remove(); }
+}
+
+function renderEvents(){
+  const el = $("events");
+  if(!el) return;
+  const events = S.events || [];
+  if(!events.length){
+    el.innerHTML = "<div class='mut'>belum ada event</div>";
+    return;
+  }
+  el.innerHTML = events.slice(0,50).map(e => {
+    const lvl = String(e.level || "INFO").toLowerCase();
+    const sym = e.symbol ? "<b>"+esc(e.symbol)+"</b> · " : "";
+    return "<div class='evtrow "+lvl+"'>"+
+      "<div class='meta'><span class='lvl'>"+esc(e.level||"INFO")+"</span>"+
+      "<span>"+esc(e.type||"")+"</span><span class='mut'>"+tsFull(e.ts)+"</span></div>"+
+      "<div class='evtmsg'>"+sym+esc(e.message||"")+"</div>"+
+      "</div>";
+  }).join("");
+}
+
 function renderPositions(){
   const tb = $("positions");
   if(!S.positions.length){
@@ -283,6 +396,8 @@ function renderPositions(){
   }
   tb.innerHTML = S.positions.map(p => {
     const tps = (p.take_profits||[]).map(x=>x.toPrecision(6)).join(" / ");
+    const modeText = p.exit_mode + (p.oco_failure_code ? " ⚠ " + p.oco_failure_code : "");
+    const modeTitle = p.oco_failure_detail ? " title='" + esc(p.oco_failure_detail) + "'" : "";
     return "<tr>"+
       "<td><b>"+p.symbol+"</b></td>"+
       "<td>"+p.entry_price.toPrecision(6)+"</td>"+
@@ -295,7 +410,7 @@ function renderPositions(){
       "<td>"+(p.trail_active?"✅":"—")+"</td>"+
       "<td class='"+cls(p.unrealized_pnl_pct)+"'>"+pct(p.unrealized_pnl_pct)+"</td>"+
       "<td class='"+cls(p.unrealized_pnl)+"'>"+(p.unrealized_pnl>=0?"+":"")+money(p.unrealized_pnl)+"</td>"+
-      "<td class='mut' style='font-size:11px'>"+p.exit_mode+"</td>"+
+      "<td class='mut' style='font-size:11px'"+modeTitle+">"+esc(modeText)+"</td>"+
       "<td><button class='danger' onclick='closePos("+p.trade_id+")'>Tutup</button></td>"+
       "</tr>";
   }).join("");
@@ -408,7 +523,7 @@ function drawCurve(){
 /* ---------------- PARAMETER RISIKO ---------------- */
 
 const PARAM_FIELDS = [
-  ["risk_per_trade_pct","Risiko per trade (% balance)","number","step=0.1"],
+  ["risk_per_trade_pct","Risiko per trade (% balance, bebas > 0)","number","step=0.1 min=0.000001"],
   ["allow_multiple_positions","Izinkan multi-posisi","checkbox",""],
   ["max_open_positions","Maks posisi saat multi aktif (1–3)","number","step=1 min=1 max=3"],
   ["daily_loss_enabled","Aktifkan batas rugi harian (UTC)","checkbox",""],

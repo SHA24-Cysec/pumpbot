@@ -16,6 +16,7 @@ pada ukuran posisi yang berbahaya.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Optional
@@ -127,7 +128,8 @@ class SignalCfg:
 
 @dataclass
 class RiskCfg:
-    # Satu-satunya batas risiko per entry: % dari balance (bukan equity/PnL berjalan).
+    # Satu input risiko per entry: % dari balance (bukan equity/PnL berjalan).
+    # Tidak ada batas atas software; tetap harus angka positif dan finite.
     risk_per_trade_pct: float = 1.0
     # Default aman: hanya satu posisi. Multi-posisi perlu opt-in eksplisit.
     allow_multiple_positions: bool = False
@@ -484,8 +486,11 @@ def validate(cfg: Config) -> list[str]:
 
     # --- risk (paling kritis!) ---
     r = cfg.risk
-    if not 0 < r.risk_per_trade_pct <= 10:
-        errors.append("risk.risk_per_trade_pct harus di rentang (0, 10] persen - jangan buang modal")
+    if (isinstance(r.risk_per_trade_pct, bool)
+            or not isinstance(r.risk_per_trade_pct, (int, float))
+            or not math.isfinite(float(r.risk_per_trade_pct))
+            or float(r.risk_per_trade_pct) <= 0):
+        errors.append("risk.risk_per_trade_pct harus angka positif (> 0); tidak ada batas atas software")
     if not isinstance(r.allow_multiple_positions, bool):
         errors.append("risk.allow_multiple_positions harus true atau false")
     if (isinstance(r.max_open_positions, bool)

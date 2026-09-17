@@ -89,6 +89,8 @@ def build_snapshot(ctx) -> dict:
             "unrealized_pnl": round(pos.unrealized_pnl(price), 4),
             "unrealized_pnl_pct": round(pos.unrealized_pnl_pct(price), 3),
             "exit_mode": pos.exit_mode + (" (fallback manual)" if pos.oco_fallback else ""),
+            "oco_failure_code": getattr(pos, "oco_failure_code", ""),
+            "oco_failure_detail": getattr(pos, "oco_failure_detail", ""),
         })
 
     equity = ctx.portfolio.quote_free + ctx.portfolio.quote_locked + positions_value
@@ -104,6 +106,7 @@ def build_snapshot(ctx) -> dict:
 
     # ---- sinyal ----
     signals = ctx.engine.top_signals(40)
+    events = db.get_recent_events(50)
 
     return {
         "type": "snapshot",
@@ -124,6 +127,12 @@ def build_snapshot(ctx) -> dict:
                 (equity / ctx.portfolio.start_equity - 1) * 100, 3
             ) if ctx.portfolio.start_equity else 0.0,
         },
+        "idr": {
+            "rate": round(getattr(ctx, "idr_rate", 0.0) or 0.0, 2),
+            "symbol": getattr(ctx, "idr_rate_symbol", ""),
+            "source": getattr(ctx, "idr_rate_source", ""),
+            "updated_at": getattr(ctx, "idr_rate_updated_at", 0),
+        },
         "daily": {
             "pnl": daily["pnl"], "pnl_pct": daily["pnl_pct"],
             "enabled": ctx.risk.params.daily_loss_enabled,
@@ -137,6 +146,7 @@ def build_snapshot(ctx) -> dict:
         "stats": {**stats, "max_dd_pct": mdd["max_dd_pct"]},
         "equity_curve": [[p["ts"], round(p["equity"], 2)] for p in curve],
         "signals": signals,
+        "events": events,
     }
 
 

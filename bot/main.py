@@ -25,8 +25,6 @@ import json
 import logging
 import os
 import signal as os_signal
-from typing import Optional
-
 from bot.config import Config
 from bot.data_collector.collector import DataCollector
 from bot.database.db import Database
@@ -51,6 +49,10 @@ class BotApp:
         self.paused = False
         self.started_at = now_ms()
         self.uvicorn_server = None
+        self.idr_rate: float = 0.0
+        self.idr_rate_symbol: str = ""
+        self.idr_rate_source: str = ""
+        self.idr_rate_updated_at: int = 0
 
         # --- komponen inti ---
         self.db = Database(cfg.database.path)
@@ -197,18 +199,29 @@ class BotApp:
                 )
                 self.executor.positions[pos.trade_id] = pos
                 if self.mode != "paper" and pos.exit_mode == "oco":
-                    # order lama di exchange tidak punya ID tersimpan ->
-                    # batalkan SEMUA order terbuka simbol ini lalu pasang ulang
+                    # Order lama di exchange tidak punya ID tersimpan ->
+                    # batalkan SEMUA order terbuka simbol ini lalu pasang ulang.
+                    # Jika pembatalan gagal, posisi tidak aman untuk dibiarkan
+                    # tanpa kepastian OCO, jadi tutup market otomatis.
                     if not await self.gateway.cancel_all_orders(pos.symbol):
-                        pos.oco_fallback = True
+                        pos.oco_failure_code = "UNKNOWN"
+                        pos.oco_failure_detail = (
+                            f"{pos.symbol}: gagal cancel order lama saat restore "
+                            "sebelum memasang OCO ulang"
+                        )
+                        self.db.record_event("ERROR", "OCO_FAIL_UNKNOWN",
+                                             pos.oco_failure_detail, pos.symbol)
+                        await self.executor._close_after_oco_failure(
+                            pos, "restore cancel orders")
             except Exception as exc:
                 logger.exception(f"Gagal pulihkan trade #{r['id']}: {exc}")
-        # pasang ulang exit order utk semua posisi OCO
+        # pasang ulang exit order utk semua posisi OCO. Jika gagal, tutup
+        # otomatis sesuai kebijakan keamanan (tidak fallback manual).
         for pos in list(self.executor.positions.values()):
-            if pos.exit_mode == "oco" and not pos.oco_fallback:
+            if pos.status == "OPEN" and pos.exit_mode == "oco" and not pos.oco_fallback:
                 ok = await self.executor.place_exit_orders(pos, force=True)
                 if not ok:
-                    pos.oco_fallback = True
+                    await self.executor._close_after_oco_failure(pos, "restore OCO")
         logger.info(f"Pemulihan selesai: {len(self.executor.positions)} posisi aktif")
 
     # ------------------------------------------------------------------
@@ -240,9 +253,12 @@ class BotApp:
             # menjalankan shutdown -> koneksi WS/session ditutup rapi dan
             # notifikasi terkirim, bukan meninggalkan "Unclosed client session"
             await self.gateway.start()
+            # Ambil filter lebih awal agar posisi yang dipulihkan bisa langsung
+            # dipasangi OCO ulang sebelum universe/watchlist selesai start.
+            self.executor.filters = await self.gateway.get_symbol_filters()
             await self._restore_positions()
             await self.collector.start()
-            self.executor.filters = getattr(self.collector, "filters", {})
+            self.executor.filters = getattr(self.collector, "filters", self.executor.filters)
 
             # equity awal (sekali) + roll hari
             await self.portfolio.refresh(force=True)
@@ -264,6 +280,8 @@ class BotApp:
                                                    name="watchlist-loop"))
             self._tasks.append(asyncio.create_task(self._daily_roll_loop(),
                                                    name="daily-roll"))
+            self._tasks.append(asyncio.create_task(self._idr_rate_loop(),
+                                                   name="idr-rate"))
 
             # ---- dust sweep (opsional, hanya mode live) ----
             sweeper = self._build_dust_sweeper()
@@ -301,6 +319,33 @@ class BotApp:
             raise
         finally:
             await self.shutdown()
+
+    # ------------------------------------------------------------------
+    async def _update_idr_rate(self) -> None:
+        """Update kurs quote asset -> IDR untuk tampilan dashboard."""
+        try:
+            data = await self.gateway.get_quote_idr_rate()
+            rate = float(data.get("rate") or 0.0)
+            if rate > 0:
+                self.idr_rate = rate
+                self.idr_rate_symbol = str(data.get("symbol") or "")
+                self.idr_rate_source = str(data.get("source") or "Binance market")
+                self.idr_rate_updated_at = now_ms()
+                logger.info(
+                    "Kurs dashboard: 1 %s ≈ %.2f IDR (%s %s)",
+                    self.cfg.quote_asset, rate, self.idr_rate_source,
+                    self.idr_rate_symbol)
+        except Exception as exc:
+            logger.debug(f"Update kurs IDR gagal: {exc}")
+
+    async def _idr_rate_loop(self) -> None:
+        """Refresh kurs IDR berkala; dipakai dashboard saja."""
+        try:
+            while True:
+                await self._update_idr_rate()
+                await asyncio.sleep(5 * 60)
+        except asyncio.CancelledError:
+            pass
 
     # ------------------------------------------------------------------
     async def _equity_loop(self) -> None:

@@ -14,8 +14,6 @@ Skor akhir digabung di engine.py (rata-rata tertimbang - penalti manipulasi).
 from __future__ import annotations
 
 import statistics
-from typing import Optional
-
 from bot.config import Config
 from bot.data_collector.buffers import SymbolBuffer
 from bot.models import DetectorResult
@@ -258,9 +256,6 @@ class ManipulationDetector:
             return DetectorResult(self.name, eligible=False,
                                   details={"reason": "data kurang"})
         closes = [cd.close for cd in candles]
-        highs = [cd.high for cd in candles]
-        lows = [cd.low for cd in candles]
-        vols = [cd.volume for cd in candles]
         last_close = closes[-1]
 
         # --- 1) pergerakan 24 jam ekstrem (sudah pump besar / crash) ---

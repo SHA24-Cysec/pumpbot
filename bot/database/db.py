@@ -23,7 +23,7 @@ import logging
 import os
 import sqlite3
 import threading
-from typing import Any, Optional
+from typing import Optional
 
 from bot.utils import now_ms
 
@@ -229,6 +229,15 @@ class Database:
         self._exec(
             "INSERT INTO events (ts, level, type, symbol, message) VALUES (?,?,?,?,?)",
             (now_ms(), level, type_, symbol, message))
+
+    def get_recent_events(self, limit: int = 50) -> list[dict]:
+        """Ambil event aplikasi terbaru untuk dashboard (warning/error/order)."""
+        limit = max(1, min(int(limit), 500))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, ts, level, type, symbol, message FROM events "
+                "ORDER BY ts DESC, id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
     def snapshot_equity(self, equity: float, available: float, in_position: float) -> None:
         self._exec(

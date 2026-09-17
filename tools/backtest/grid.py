@@ -307,7 +307,6 @@ def _write_csv(path: str, rows: list[dict]) -> None:
 
 def _report(rows, wf_rows, args, n_symbols) -> str:
     """Laporan ringkas + analisis plateau sederhana."""
-    tests = [r for r in rows if r["window"].startswith("test_")]
     trains = [r for r in rows if r["window"].startswith("train_")]
 
     # agregasi OOS gabungan dari wf_summary

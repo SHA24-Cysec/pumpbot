@@ -79,7 +79,7 @@ tidak dipakai di sini.
         ┌───────────────────────────▼───────────────────────────┐
         │  EXECUTION (REST)                                        │
         │  • entry market/limit • OCO (TP limit + SL stop-limit)  │
-        │  • partial TP per chunk • fallback manual bila OCO gagal│
+        │  • partial TP per chunk • auto-close bila OCO gagal     │
         └───────────────────────────┬───────────────────────────┘
                                     │
         ┌───────────────────────────▼───────────────────────────┐
@@ -228,10 +228,11 @@ Semua panel update real-time via WebSocket (`/ws`), tanpa refresh manual:
 
 | Panel | Isi |
 |---|---|
-| **Kartu ringkasan** | equity, saldo tersedia/terkunci, PnL harian vs batas rugi, win rate, profit factor, total PnL, max drawdown |
+| **Kartu ringkasan** | equity, saldo tersedia/terkunci, PnL harian, expectancy, dan total PnL tetap dalam quote asset + estimasi Rupiah dari market Binance |
 | **Equity curve** | grafik perkembangan modal (snapshot tiap 30 detik) |
 | **Posisi terbuka** | pair, entry, harga kini, qty, nilai, SL, TP, status BE & trailing, PnL% & nominal, tombol **Tutup** |
-| **Histori transaksi** | waktu entry/exit, harga, PnL, alasan exit (SL/TP/trailing/manual) |
+| **Histori transaksi** | waktu entry/exit, harga, PnL, alasan exit (SL/TP/trailing/manual/OCO gagal) |
+| **Peringatan/Event** | log penting dashboard termasuk penyebab OCO gagal dan auto-close |
 | **Panel sinyal** | semua koin dipantau + skor terbaru per detector, flag GATE/VETO |
 | **Parameter risiko (live)** | ubah risk % balance, aktifkan mode multi-posisi (maks. 3 pair), pilih batas rugi harian opsional, threshold skor, serta on/off trailing & breakeven — **tanpa restart** |
 | **Kontrol** | tombol **Pause/Resume Bot** (pause menghentikan entry baru; posisi tetap dikelola) |
@@ -284,8 +285,10 @@ bisa melebihi quote balance yang tersedia (dengan buffer fee 0,5%); bila saldo
 fisik tidak cukup, qty — dan risiko efektif — hanya dapat menjadi lebih kecil,
 tidak pernah lebih besar.
 
-Tidak ada lagi parameter cap nilai posisi atau budget total risk yang terpisah.
-Tetap berlaku pembulatan `LOT_SIZE` dan pengecekan `MIN_NOTIONAL` exchange.
+Tidak ada batas atas software untuk `risk_per_trade_pct`: nilainya fleksibel dan
+bisa diatur ke angka positif berapa pun dari YAML atau dashboard. Batas yang
+masih berlaku hanyalah batas fisik/teknis, yaitu saldo quote tersedia,
+pembulatan `LOT_SIZE`, pengecekan `MIN_NOTIONAL`, dan batas exchange lain.
 
 ### 2. Batas rugi harian opsional
 
@@ -375,10 +378,12 @@ Cocok untuk memverifikasi seluruh pipeline & dashboard tanpa risiko apa pun.
 ## Pemulihan Setelah Restart
 
 Bot mencatat semua posisi ke SQLite. Saat dinyalakan ulang:
-1. Posisi `OPEN` dimuat kembali dari database.
+1. Filter exchange diambil lebih awal, lalu posisi `OPEN` dimuat dari database.
 2. Order terbuka lama di simbol tersebut dibatalkan, OCO dipasang ulang dengan
    SL/TP terkini.
-3. Trading lanjut seperti biasa.
+3. Jika OCO restore gagal, penyebabnya dicatat di dashboard/log dan posisi
+   ditutup market otomatis agar tidak berjalan tanpa proteksi exchange.
+4. Trading lanjut seperti biasa untuk posisi yang berhasil dipulihkan.
 
 ## Dust Sweep (Konversi Sisa Koin Kecil ke BNB)
 
@@ -422,11 +427,14 @@ saldo tidak cukup untuk `MIN_NOTIONAL` setelah fee — cek kartu saldo di
 dashboard. Log penolakan entry ada di tabel `events` (kolom `type` =
 `ENTRY_REJECTED`) beserta alasannya.
 
-**`OCO gagal dipasang -> fallback ke mode manual`**
-Testnet kadang menolak OCO (mis. `PERCENT_PRICE`). Bot otomatis beralih ke
-mode manual untuk posisi itu (SL/TP dieksekusi bot sendiri). Selama bot jalan,
-proteksi tetap ada; tapi bila bot mati, posisi mode manual tidak punya SL di
-exchange — pertimbangkan menutupnya dulu sebelum mematikan bot.
+**OCO gagal dipasang**
+Bot mengklasifikasikan penyebab OCO gagal di log dan dashboard dengan kode
+berbeda, misalnya `OCO_FAIL_PRICE_FILTER`, `OCO_FAIL_LOT_SIZE`,
+`OCO_FAIL_MIN_NOTIONAL`, `OCO_FAIL_INSUFFICIENT_BALANCE`,
+`OCO_FAIL_IMMEDIATE_TRIGGER`, `OCO_FAIL_RATE_LIMIT`, atau `OCO_FAIL_NETWORK`.
+Jika OCO gagal, posisi langsung ditutup market otomatis demi keamanan agar
+tidak berjalan tanpa proteksi order di exchange. Event penutupan tercatat
+sebagai `OCO_FAILED_POSITION_CLOSED`.
 
 **WebSocket sering putus**
 SDK resmi otomatis reconnect (10 percobaan, jeda 5 detik) + watchdog kami

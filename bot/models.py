@@ -228,7 +228,9 @@ class Position:
     realized_pnl: float = 0.0
     fees_paid: float = 0.0
     exit_mode: str = "oco"    # oco | manual
-    oco_fallback: bool = False  # True jika OCO gagal & posisi dikelola manual
+    oco_fallback: bool = False  # legacy: True jika OCO gagal & dikelola manual
+    oco_failure_code: str = ""     # PRICE_FILTER / LOT_SIZE / dst.
+    oco_failure_detail: str = ""   # pesan terakhir untuk dashboard/log
     status: str = "OPEN"      # OPEN | CLOSED
     exit_time: Optional[int] = None
     exit_price: Optional[float] = None
@@ -271,4 +273,6 @@ class Position:
             "realized_pnl": self.realized_pnl,
             "status": self.status,
             "exit_mode": self.exit_mode + ("(fallback)" if self.oco_fallback else ""),
+            "oco_failure_code": self.oco_failure_code,
+            "oco_failure_detail": self.oco_failure_detail,
         }

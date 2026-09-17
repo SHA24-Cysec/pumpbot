@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Optional
+from typing import Optional
 
 from bot.config import Config
 from bot.data_collector.collector import DataCollector
 from bot.execution.executor import Executor
-from bot.models import Candle, Position
+from bot.models import Position
 from bot.risk_management.stops import (
     atr,
     breakeven_price,
@@ -171,12 +171,21 @@ class PositionManager:
         if price <= pos.stop_loss:
             await self.executor.close_position(pos, "SL (manual)")
             return
-        # TP berikutnya tersentuh? -> jual chunk tsb (partial take profit)
+        # TP berikutnya tersentuh? -> jual chunk tsb (partial take profit).
+        # Status chunk baru ditandai FILLED setelah market sell sukses.
+        # Jika sell gagal sementara chunk sudah ditandai FILLED, bot tidak akan
+        # retry TP itu lagi dan posisi bisa menggantung.
         for chunk in pos.chunks:
             if chunk.status == "PENDING" and price >= chunk.tp_price:
-                chunk.status = "FILLED"
                 fraction = (chunk.qty / pos.qty_remaining
                             if pos.qty_remaining > 0 else 1.0)
-                await self.executor.close_position(pos, "TP (manual)",
-                                                   fraction=fraction)
+                ok = await self.executor.close_position(pos, "TP (manual)",
+                                                        fraction=fraction)
+                if ok:
+                    chunk.status = "FILLED"
+                    self.executor.db.update_trade(
+                        pos.trade_id, qty_remaining=pos.qty_remaining,
+                        realized_pnl=round(pos.realized_pnl, 6),
+                        fees_paid=round(pos.fees_paid, 6))
+                    await self.executor._finalize_if_done(pos, price, "TP (manual)")
                 return

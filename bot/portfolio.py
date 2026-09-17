@@ -12,11 +12,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
-
 from bot.config import Config
 from bot.exchange.gateway import ExchangeGateway
-from bot.utils import now_ms
 
 logger = logging.getLogger("pumpbot.portfolio")
 

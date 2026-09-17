@@ -12,7 +12,7 @@ tidak perlu tahu sedang jalan di mode apa - memudahkan pengujian tanpa risiko.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable, Optional
+from typing import Callable
 
 from bot.models import BookSnapshot, Candle, Fill, SymbolFilters, Ticker24h, Trade
 
@@ -56,6 +56,14 @@ class ExchangeGateway(ABC):
     async def get_klines(self, symbol: str, interval: str, limit: int) -> list[Candle]:
         """Ambil candle historis (untuk baseline detector saat startup)."""
 
+    async def get_quote_idr_rate(self) -> dict:
+        """
+        Kurs quote asset ke IDR untuk estimasi tampilan dashboard.
+        Return: {"rate": float, "symbol": str, "source": str}.
+        Implementasi boleh return rate 0 jika kurs tidak tersedia.
+        """
+        return {"rate": 0.0, "symbol": "", "source": ""}
+
     # -------------------------------------------------------------- streaming
     @abstractmethod
     async def subscribe(
@@ -72,6 +80,10 @@ class ExchangeGateway(ABC):
     @abstractmethod
     async def get_quote_balance(self) -> tuple[float, float]:
         """Saldo quote asset -> (free, locked) dalam satuan quote."""
+
+    async def get_base_balance(self, symbol: str) -> tuple[float, float]:
+        """Saldo base asset dari simbol -> (free, locked). Default: tidak tersedia."""
+        return 0.0, 0.0
 
     # -------------------------------------------------------------- trading
     @abstractmethod

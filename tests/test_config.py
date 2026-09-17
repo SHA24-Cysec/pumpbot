@@ -74,11 +74,11 @@ def test_negative_risk_rejected():
     assert any("risk_per_trade_pct" in e for e in errs)
 
 
-def test_absurd_risk_rejected():
+def test_high_risk_has_no_software_cap():
     cfg = _base_cfg()
-    cfg.risk.risk_per_trade_pct = 50.0     # 50% per trade = bukan manajemen risiko
+    cfg.risk.risk_per_trade_pct = 50.0
     errs = validate(cfg)
-    assert any("risk_per_trade_pct" in e for e in errs)
+    assert not any("risk_per_trade_pct" in e for e in errs)
 
 
 def test_tp_sell_pct_must_total_100():

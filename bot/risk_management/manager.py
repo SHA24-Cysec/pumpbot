@@ -14,6 +14,7 @@ Semua keputusan entry dicatat oleh Executor agar dapat diaudit.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -107,8 +108,9 @@ class RiskManager:
                 except (TypeError, ValueError):
                     errors.append(f"{key} harus angka")
 
-            if not 0 < p.risk_per_trade_pct <= 10:
-                errors.append("risk_per_trade_pct harus di rentang (0, 10]")
+            if (not math.isfinite(p.risk_per_trade_pct)
+                    or p.risk_per_trade_pct <= 0):
+                errors.append("risk_per_trade_pct harus angka positif (> 0); tidak ada batas atas software")
             if not 1 <= p.max_open_positions <= 3:
                 errors.append("max_open_positions harus di rentang [1, 3]")
             if not 0 < p.daily_loss_limit_pct <= 50:

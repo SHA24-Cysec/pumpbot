@@ -10,7 +10,7 @@
 #   paper   -> simulasi internal tanpa API key (DEFAULT dan paling aman)
 #   testnet -> Binance Spot Testnet (data & order palsu)
 #   live    -> uang sungguhan (hanya setelah testnet stabil)
-mode: testnet
+mode: live
 
 # Mata uang quote yang dipakai trading (semua pair berakhiran USDT)
 quote_asset: USDT
@@ -21,7 +21,7 @@ quote_asset: USDT
 universe:
   # Jumlah koin maksimum yang dipantau sekaligus (batasi beban WebSocket & API).
   # Diambil dari koin dengan volume 24 jam tertinggi yang lolos filter.
-  max_symbols: 40
+  max_symbols: 100
 
   # Volume quote 24 jam minimum (dalam satuan quote, 5_000_000 = 5 juta USDT)
   # supaya tidak memantau koin yang terlalu sepi / mudah dimanipulasi.
@@ -181,8 +181,10 @@ signal:
 # ----------------------------------------------------------------------------
 risk:
   # Satu parameter risiko entry: persen dari BALANCE (bukan unrealized PnL).
-  # 1.0 berarti rugi target saat SL tersentuh adalah sekitar 1% balance.
-  risk_per_trade_pct: 1.0
+  # Tidak ada batas atas software; angka berapa pun > 0 diterima.
+  # Contoh: 1.0 = risk target 1% balance, 25.0 = 25% balance.
+  # Di Spot, ukuran order tetap dibatasi saldo quote tersedia dan aturan exchange.
+  risk_per_trade_pct: 99.0
 
   # Default aman: satu posisi saja. Set true untuk mengizinkan hingga 3 pair.
   allow_multiple_positions: false
@@ -290,6 +292,6 @@ paper:
 # ----------------------------------------------------------------------------
 dust_sweep:
   # Nonaktif untuk mode paper. Aktifkan hanya ketika mode: live.
-  enabled: false
+  enabled: true
   interval_minutes: 360     # jeda antar sweep (min 30 menit, jaga rate limit)
   min_value_usd: 1.0        # aset bernilai di bawah ini (perkiraan) dianggap dust

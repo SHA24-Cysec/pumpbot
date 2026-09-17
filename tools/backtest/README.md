@@ -78,7 +78,7 @@ Hasil ada di `tools/backtest/out/`:
 | `results.csv` | Semua kombinasi × window (bisa dianalisis lanjut di Excel/pandas) |
 | `heat_*.png` | Heatmap drawdown per pasangan parameter |
 
-Untuk analisis cepat iterasi awal bisa juga: `python tools/backtest/synthetic.py --symbols 6 --days 60` lalu `grid.py --train-days 20 --test-days 7` (data sintetis hanya untuk menguji pipeline, BUKAN untuk menarik kesimpulan parameter).
+Untuk analisis cepat iterasi awal bisa juga: `python tools/backtest/synthetic.py --symbols 6 --days 60` lalu `grid.py --train-days 20 --test-days 7` (data sintetis hanya untuk menguji pipeline, BUKAN untuk menarik kesimpulan parameter). Gunakan `--out /tmp/bt-data` jika tidak ingin menulis data sintetis ke folder project.
 
 ## Metode
 

@@ -32,12 +32,62 @@ from bot.portfolio import Portfolio
 from bot.risk_management.manager import RiskManager
 from bot.risk_management.stops import (
     initial_stop,
-    should_update_exit_order,
     take_profit_levels,
 )
 from bot.utils import now_ms
 
 logger = logging.getLogger("pumpbot.exec")
+
+
+def _error_text(exc: Exception) -> str:
+    """Ambil pesan error paling informatif dari exception Binance/SDK."""
+    parts: list[str] = []
+    for attr in ("error_message", "message", "status_code"):
+        value = getattr(exc, attr, None)
+        if value not in (None, ""):
+            parts.append(str(value))
+    raw = str(exc)
+    if raw and raw not in parts:
+        parts.append(raw)
+    return " | ".join(parts) or exc.__class__.__name__
+
+
+def _short(text: str, max_len: int = 240) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= max_len else text[: max_len - 3] + "..."
+
+
+def classify_oco_failure(exc: Exception) -> tuple[str, str]:
+    """Klasifikasi basic penyebab OCO gagal agar log/dashboard mudah dibaca."""
+    raw = _error_text(exc)
+    up = raw.upper()
+
+    if "PRICE_FILTER" in up:
+        return ("PRICE_FILTER",
+                "harga TP/SL/SL-limit tidak sesuai tickSize atau batas harga exchange")
+    if "LOT_SIZE" in up or "MARKET_LOT_SIZE" in up:
+        return ("LOT_SIZE",
+                "qty OCO tidak sesuai stepSize/minQty/maxQty exchange")
+    if "MIN_NOTIONAL" in up or "NOTIONAL" in up:
+        return ("MIN_NOTIONAL",
+                "nilai order/chunk OCO di bawah minimum notional exchange")
+    if ("INSUFFICIENT" in up or "BALANCE" in up or "ACCOUNT HAS INSUFFICIENT" in up):
+        return ("INSUFFICIENT_BALANCE",
+                "saldo aset tidak cukup untuk memasang OCO sell")
+    if "IMMEDIATELY" in up or "WOULD TRIGGER" in up or "TRIGGER" in up:
+        return ("IMMEDIATE_TRIGGER",
+                "harga TP/SL terlalu dekat atau sudah tersentuh sehingga order akan langsung trigger")
+    if "TOO MANY" in up or "429" in up or "RATE LIMIT" in up:
+        return ("RATE_LIMIT",
+                "rate limit Binance tercapai saat memasang OCO")
+    if ("TIMEOUT" in up or "CONNECTION" in up or "NETWORK" in up
+            or "REST GAGAL" in up or "SERVER" in up):
+        return ("NETWORK",
+                "gangguan koneksi/server saat memasang OCO")
+    if "TIMESTAMP" in up or "RECVWINDOW" in up:
+        return ("TIMESTAMP",
+                "timestamp/recvWindow request Binance tidak valid")
+    return ("UNKNOWN", "penyebab OCO gagal belum dikenali; lihat raw error")
 
 
 class Executor:
@@ -216,19 +266,6 @@ class Executor:
                              realized_pnl=round(pos.realized_pnl, 6),
                              fees_paid=round(pos.fees_paid, 6))
 
-        # ---- 6. pasang exit order (OCO) ----
-        if pos.exit_mode == "oco":
-            ok = await self.place_exit_orders(pos, force=True)
-            if not ok:
-                # fallback ke manajemen manual - posisi tetap terlindungi
-                # selama bot hidup, tapi TANPA proteksi di sisi exchange.
-                pos.oco_fallback = True
-                logger.warning(
-                    f"{symbol}: OCO gagal dipasang -> fallback ke mode manual "
-                    f"(SL dipantau bot, bukan order di exchange)")
-                self.db.add_trade_event(trade_id, "OCO_FALLBACK", entry_price,
-                                        actual_qty, 0.0, "OCO gagal, mode manual")
-
         self.db.record_event(
             "INFO", "ENTRY",
             f"{symbol}: beli {actual_qty:.6f} @ {entry_price:.6f} "
@@ -236,6 +273,13 @@ class Executor:
             f"TP {[round(c.tp_price, 6) for c in chunks]})", symbol)
         logger.info(f"ENTRY #{trade_id} {symbol}: {actual_qty:.6f} @ {entry_price:.6f} "
                     f"SL={stop:.6f} TP={[round(c.tp_price, 6) for c in chunks]}")
+
+        # ---- 6. pasang exit order (OCO) ----
+        if pos.exit_mode == "oco":
+            ok = await self.place_exit_orders(pos, force=True)
+            if not ok:
+                await self._close_after_oco_failure(pos, "initial OCO")
+
         return pos
 
     async def _limit_entry(self, symbol: str, qty: float, ref_price: float,
@@ -311,7 +355,8 @@ class Executor:
                                         force: bool = False) -> bool:
         """
         (Re)pasang OCO untuk semua chunk yang belum selesai.
-        Return False kalau SEMUA upaya gagal (pemanggil harus fallback manual).
+        Return False kalau ada OCO yang gagal agar pemanggil dapat menutup
+        posisi otomatis dan tidak meninggalkan qty tanpa proteksi exchange.
 
         Dipanggil dengan self._oco_lock DIPEGANG (lewat place_exit_orders atau
         dari reconcile_oco / close_position yang sudah memegang lock).
@@ -334,6 +379,7 @@ class Executor:
         # --- 3. pasang OCO baru hanya untuk chunk yang benar-benar pending,
         #        dengan qty dijepit ke sisa posisi (anti oversell) ---
         placed_any = False
+        failed_any = False
         for chunk in pos.chunks:
             if chunk.status != "PENDING":
                 continue
@@ -341,18 +387,25 @@ class Executor:
             if qty <= 0:
                 chunk.status = "CANCELED"
                 continue
+            tp_price = filters.round_price(chunk.tp_price, "up")
+            stop_price = filters.round_price(pos.stop_loss, "down")
             try:
                 oco_id = await self.gateway.place_oco_sell(
                     symbol=pos.symbol, qty=qty,
-                    tp_price=filters.round_price(chunk.tp_price, "up"),
-                    stop_price=filters.round_price(pos.stop_loss, "down"),
+                    tp_price=tp_price,
+                    stop_price=stop_price,
                 )
                 chunk.oco_list_id = oco_id
                 placed_any = True
             except Exception as exc:
-                logger.error(f"Gagal pasang OCO {pos.symbol} chunk "
-                             f"(qty {qty}): {exc}")
+                failed_any = True
+                self._record_oco_failure(
+                    pos=pos, chunk=chunk, qty=qty,
+                    tp_price=tp_price, stop_price=stop_price, exc=exc,
+                )
         pos.last_oco_sync = now_ms()
+        if failed_any:
+            return False
         return placed_any or all(c.status != "PENDING" for c in pos.chunks)
 
     async def sync_exit_orders(self, pos: Position) -> None:
@@ -370,10 +423,41 @@ class Executor:
             return
         ok = await self.place_exit_orders(pos)
         if not ok and any(c.status == "PENDING" for c in pos.chunks):
-            pos.oco_fallback = True
-            self.db.add_trade_event(pos.trade_id, "OCO_FALLBACK",
-                                    pos.stop_loss, pos.qty_remaining, 0.0,
-                                    "re-place OCO gagal -> manual")
+            await self._close_after_oco_failure(pos, "re-place OCO")
+
+    def _record_oco_failure(self, pos: Position, chunk: ExitChunk, qty: float,
+                            tp_price: float, stop_price: float,
+                            exc: Exception) -> None:
+        """Catat OCO gagal dengan kode penyebab berbeda untuk log/dashboard."""
+        code, cause = classify_oco_failure(exc)
+        raw = _short(_error_text(exc))
+        detail = (
+            f"{pos.symbol}: OCO gagal [{code}] - {cause}. "
+            f"qty={qty:.10g}, TP={tp_price:.10g}, SL={stop_price:.10g}. "
+            f"Raw: {raw}"
+        )
+        pos.oco_failure_code = code
+        pos.oco_failure_detail = detail
+        logger.error(detail)
+        self.db.record_event("ERROR", f"OCO_FAIL_{code}", detail, pos.symbol)
+        self.db.add_trade_event(pos.trade_id, f"OCO_FAIL_{code}",
+                                stop_price, qty, 0.0, detail)
+
+    async def _close_after_oco_failure(self, pos: Position, stage: str) -> None:
+        """Tutup posisi otomatis jika OCO gagal agar tidak tanpa proteksi exchange."""
+        code = pos.oco_failure_code or "UNKNOWN"
+        detail = pos.oco_failure_detail or f"{pos.symbol}: OCO gagal tanpa detail tambahan"
+        reason = f"OCO gagal [{code}] - posisi ditutup otomatis"
+        msg = (
+            f"{pos.symbol}: {stage} gagal [{code}]. "
+            "Posisi ditutup market untuk keamanan agar tidak berjalan tanpa OCO. "
+            f"Detail: {detail}"
+        )
+        logger.warning(msg)
+        self.db.record_event("WARNING", "OCO_FAILED_POSITION_CLOSED", msg, pos.symbol)
+        self.db.add_trade_event(pos.trade_id, "OCO_FAILED_POSITION_CLOSED",
+                                pos.stop_loss, pos.qty_remaining, 0.0, msg)
+        await self.close_position(pos, reason, fraction=1.0)
 
     # ==================================================================
     # REKONSILIASI OCO (deteksi fill dari sisi exchange)
@@ -479,6 +563,9 @@ class Executor:
             try:
                 fill = await self.gateway.market_sell(pos.symbol, qty)
             except Exception as exc:
+                if await self._handle_close_insufficient_balance(
+                        pos, requested_qty=qty, reason=reason, exc=exc):
+                    return True
                 self.db.record_event("ERROR", "CLOSE_FAILED",
                                      f"{pos.symbol}: {exc}", pos.symbol)
                 logger.error(f"Gagal tutup posisi #{pos.trade_id} {pos.symbol}: {exc}")
@@ -488,6 +575,101 @@ class Executor:
             if fraction >= 1.0:
                 await self._finalize_if_done(pos, fill.price, reason, force=True)
             return True
+
+    async def _handle_close_insufficient_balance(
+            self, pos: Position, requested_qty: float, reason: str,
+            exc: Exception) -> bool:
+        """
+        Rekonsiliasi jika market sell ditolak karena saldo base tidak cukup.
+
+        Kasus nyata: OCO/SL ternyata sudah tereksekusi di Binance atau posisi
+        ditutup manual dari aplikasi Binance, tetapi database bot masih OPEN.
+        Bot lalu mencoba menjual qty yang sudah tidak ada dan Binance membalas
+        -2010 insufficient balance. Jika saldo base memang sudah nol/dust,
+        tutup record lokal agar dashboard tidak terus retry CLOSE_FAILED.
+        """
+        code, cause = classify_oco_failure(exc)
+        if code != "INSUFFICIENT_BALANCE":
+            return False
+
+        filters = self.filters.get(pos.symbol)
+        try:
+            free, locked = await self.gateway.get_base_balance(pos.symbol)
+        except Exception as bal_exc:  # jika cek saldo gagal, jangan asumsi closed
+            self.db.record_event(
+                "ERROR", "CLOSE_BALANCE_CHECK_FAILED",
+                f"{pos.symbol}: gagal cek saldo base setelah insufficient balance: {bal_exc}",
+                pos.symbol)
+            return False
+
+        price = (getattr(pos, "_last_price", 0.0)
+                 or self.last_prices.get(pos.symbol, 0.0)
+                 or pos.stop_loss or pos.entry_price)
+        min_qty = filters.min_qty if filters else 0.0
+        min_notional = filters.min_notional if filters else 0.0
+        total_base = max(0.0, float(free or 0.0) + float(locked or 0.0))
+
+        # Jika masih ada saldo sellable, coba jual qty yang benar-benar ada.
+        sellable = filters.round_qty(free, market=True) if filters else free
+        if sellable > 0 and sellable < requested_qty:
+            if (not filters or sellable >= min_qty) and (price <= 0 or sellable * price >= min_notional):
+                try:
+                    fill = await self.gateway.market_sell(pos.symbol, sellable)
+                    await self.partial_exit(
+                        pos, fill.qty, fill.price,
+                        reason + " (qty disesuaikan dengan saldo exchange)",
+                        fill.fee_quote)
+                    if pos.qty_remaining * (fill.price or price) < max(min_notional, 0.0):
+                        for c in pos.chunks:
+                            if c.status == "PENDING":
+                                c.status = "CANCELED"
+                        pos.qty_remaining = 0.0
+                        await self._finalize_if_done(
+                            pos, fill.price or price,
+                            reason + " (sisa dust direkonsiliasi)", force=True)
+                    return True
+                except Exception:
+                    # Lanjut cek apakah sisanya ternyata hanya dust/nol.
+                    pass
+
+        # Kalau saldo base sudah nol atau hanya dust di bawah minNotional,
+        # anggap posisi sudah selesai di exchange dan tutup record lokal.
+        dust_or_zero = (total_base <= max(min_qty, 1e-12))
+        if not dust_or_zero and price > 0 and min_notional > 0:
+            dust_or_zero = total_base * price < min_notional
+
+        if not dust_or_zero:
+            self.db.record_event(
+                "ERROR", "CLOSE_FAILED_INSUFFICIENT_BALANCE",
+                f"{pos.symbol}: {cause}; requested={requested_qty:.10g}, "
+                f"saldo_free={free:.10g}, saldo_locked={locked:.10g}",
+                pos.symbol)
+            return False
+
+        remaining = pos.qty_remaining
+        if remaining > 0 and price > 0:
+            # Estimasi PnL supaya statistik tidak kosong; fill asli ada di Binance.
+            pos.realized_pnl += (price - pos.entry_price) * remaining
+        pos.qty_remaining = 0.0
+        for c in pos.chunks:
+            if c.status == "PENDING":
+                c.status = "CANCELED"
+
+        close_reason = (
+            f"{reason} - rekonsiliasi: saldo base sudah tidak ada di exchange "
+            f"(kemungkinan OCO/SL/manual Binance sudah tereksekusi)"
+        )
+        detail = (
+            f"{pos.symbol}: market sell ditolak insufficient balance, tetapi "
+            f"saldo base free={free:.10g}, locked={locked:.10g}. "
+            "Record lokal ditutup agar dashboard sinkron dengan Binance."
+        )
+        logger.warning(detail)
+        self.db.record_event("WARNING", "EXTERNAL_CLOSE_RECONCILED", detail, pos.symbol)
+        self.db.add_trade_event(pos.trade_id, "EXTERNAL_CLOSE_RECONCILED",
+                                price, remaining, 0.0, detail)
+        await self._finalize_if_done(pos, price, close_reason, force=True)
+        return True
 
     async def _finalize_if_done(self, pos: Position, exit_price: float,
                                 reason: str, force: bool = False) -> None:

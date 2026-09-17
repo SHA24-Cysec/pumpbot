@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
-import sys
 import time
 
 import _bootstrap  # noqa: F401  (path setup)

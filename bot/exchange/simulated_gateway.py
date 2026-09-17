@@ -159,6 +159,19 @@ class SimulatedGateway(ExchangeGateway):
             ))
         return out
 
+    async def get_quote_idr_rate(self) -> dict:
+        """Estimasi kurs untuk mode paper agar dashboard tetap bisa preview IDR."""
+        q = self.quote_asset.upper()
+        if q == "IDR":
+            rate = 1.0
+        else:
+            rate = 16_500.0 if q in ("USDT", "USDC", "FDUSD", "BUSD") else 0.0
+        return {
+            "rate": rate,
+            "symbol": f"SIM:{q}IDR" if rate else "",
+            "source": "simulated" if rate else "",
+        }
+
     async def get_klines(self, symbol: str, interval: str, limit: int) -> list[Candle]:
         """Bangkitkan candle historis (random walk mundur dari harga sekarang)."""
         sim = self.sims.get(symbol)
@@ -201,6 +214,9 @@ class SimulatedGateway(ExchangeGateway):
     # ------------------------------------------------------------- akun
     async def get_quote_balance(self) -> tuple[float, float]:
         return self.balance_quote, 0.0
+
+    async def get_base_balance(self, symbol: str) -> tuple[float, float]:
+        return self.base_balances.get(symbol, 0.0), 0.0
 
     # ------------------------------------------------------------- trading
     def _next_order_id(self) -> int:
@@ -536,7 +552,6 @@ class SimulatedGateway(ExchangeGateway):
         """Isi limit order & OCO berdasarkan pergerakan harga simulasi."""
         try:
             while self._running:
-                now = self.sim_now_ms()
                 for oid, o in list(self._limit_orders.items()):
                     if o["status"] != "NEW":
                         continue

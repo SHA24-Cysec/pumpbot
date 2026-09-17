@@ -11,9 +11,11 @@ Model per simbol (mirip SimulatedGateway tapi pada level candle):
 
 Pemakaian:
     python tools/backtest/synthetic.py --symbols 6 --days 30
+    python tools/backtest/synthetic.py --symbols 2 --days 8 --out /tmp/bt-data
     python tools/backtest/synthetic.py --selftest   # uji pipeline end-to-end
 
-Output: tools/backtest/data/SIM{N}USDT_1m.csv.gz (format sama dengan download.py)
+Output default: tools/backtest/data/SIM{N}USDT_1m.csv.gz
+(format sama dengan download.py).
 """
 
 from __future__ import annotations
@@ -144,16 +146,19 @@ def main(argv=None) -> int:
     ap.add_argument("--symbols", type=int, default=6)
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--out", default=_bootstrap.DATA_DIR,
+                    help="folder output CSV.gz sintetis")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
     if args.selftest:
         return selftest()
 
+    os.makedirs(args.out, exist_ok=True)
     for i in range(args.symbols):
         sym = f"SIM{i+1}USDT"
         candles = generate_symbol(seed=args.seed + i, days=args.days)
-        path = os.path.join(_bootstrap.DATA_DIR, f"{sym}_1m.csv.gz")
+        path = os.path.join(args.out, f"{sym}_1m.csv.gz")
         save(candles, path)
         print(f"{sym}: {len(candles):,} candle -> {path}")
     print("\nSelesai. Lanjut: python tools/backtest/grid.py")

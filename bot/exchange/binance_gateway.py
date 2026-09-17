@@ -14,10 +14,13 @@ Hal penting desain:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import re
 import time
+import urllib.parse
+import urllib.request
 from typing import Callable, Optional
 
 from bot.models import BookSnapshot, Candle, Fill, SymbolFilters, Ticker24h, Trade
@@ -44,7 +47,6 @@ try:
         ServerError,
         TooManyRequestsError,
     )
-    from binance_common.models import ApiResponse
     from binance_sdk_spot.spot import Spot
 
     from binance_sdk_spot.rest_api.models.enums import (
@@ -55,11 +57,6 @@ try:
         NewOrderTypeEnum,
         OrderOcoSideEnum,
         OrderOcoStopLimitTimeInForceEnum,
-    )
-    from binance_sdk_spot.websocket_streams.models.enums import (
-        KlineIntervalEnum as WSKlineIntervalEnum,
-        PartialBookDepthLevelsEnum,
-        PartialBookDepthUpdateSpeedEnum,
     )
     _SDK_AVAILABLE = True
 
@@ -171,6 +168,11 @@ class BinanceGateway(ExchangeGateway):
             rest_url, ws_url = SPOT_REST_API_PROD_URL, SPOT_WS_STREAMS_PROD_URL
         else:
             rest_url, ws_url = SPOT_REST_API_TESTNET_URL, SPOT_WS_STREAMS_TESTNET_URL
+        self._rest_base_url = rest_url.rstrip("/")
+        # Kurs IDR untuk dashboard memakai market data publik Binance produksi
+        # agar tetap tersedia saat bot berjalan di testnet. Ini hanya baca data,
+        # bukan endpoint trading dan tidak memakai API key.
+        self._market_rest_base_url = SPOT_REST_API_PROD_URL.rstrip("/")
 
         self._client = Spot(
             config_rest_api=ConfigurationRestAPI(
@@ -192,6 +194,9 @@ class BinanceGateway(ExchangeGateway):
         self._watchdog_task: Optional[asyncio.Task] = None
         self._subscribed_symbols: list[str] = []
         self._cbs: dict = {}
+        # Cache filter exchangeInfo. Dipakai juga saat membuat OCO agar semua
+        # harga leg OCO (TP, stop trigger, stop-limit) patuh PRICE_FILTER.
+        self._symbol_filters: dict[str, SymbolFilters] = {}
         logger.info(f"BinanceGateway aktif: mode={mode.upper()} rest={rest_url} ws={ws_url} "
                     f"depth={self._depth_levels} level")
 
@@ -265,6 +270,7 @@ class BinanceGateway(ExchangeGateway):
                 out[sym["symbol"]] = sf
             except (KeyError, ValueError) as exc:
                 logger.debug(f"Lewati simbol rusak {sym.get('symbol')}: {exc}")
+        self._symbol_filters = out
         logger.info(f"exchangeInfo: {len(out)} simbol TRADING")
         return out
 
@@ -339,6 +345,98 @@ class BinanceGateway(ExchangeGateway):
         # Fallback: tanpa parameter (masih diterima testnet).
         resp = await self._rest(self._client.rest_api.ticker24hr)
         return _parse(resp)
+
+    async def _public_ticker_price(self, symbol: str) -> float:
+        """Ambil harga ticker publik dari Binance REST produksi."""
+        def _fetch() -> float:
+            query = urllib.parse.urlencode({"symbol": symbol})
+            url = f"{self._market_rest_base_url}/api/v3/ticker/price?{query}"
+            with urllib.request.urlopen(url, timeout=5) as resp:  # public market data
+                data = json.loads(resp.read().decode("utf-8"))
+            return _f(data.get("price"))
+        return await asyncio.to_thread(_fetch)
+
+    async def _public_p2p_usdt_idr_price(self) -> float:
+        """Fallback kurs USDT/IDR dari Binance P2P publik jika spot pair tidak ada."""
+        def _fetch() -> float:
+            url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+            payload = {
+                "asset": "USDT", "fiat": "IDR", "tradeType": "BUY",
+                "page": 1, "rows": 1, "payTypes": [], "publisherType": None,
+            }
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=data, method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "pumpbot-dashboard/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=7) as resp:  # public market data
+                body = json.loads(resp.read().decode("utf-8"))
+            rows = body.get("data") or []
+            if not rows:
+                return 0.0
+            price = str(rows[0].get("adv", {}).get("price", "0")).replace(",", "")
+            return _f(price)
+        return await asyncio.to_thread(_fetch)
+
+    async def get_quote_idr_rate(self) -> dict:
+        """Kurs quote asset -> IDR dari market publik Binance untuk dashboard."""
+        quote = self.quote_asset.upper()
+        if quote == "IDR":
+            return {"rate": 1.0, "symbol": "IDR", "source": "Binance market"}
+
+        # Prioritas direct pair. BIDR/IDRT adalah token rupiah; untuk tampilan
+        # dashboard diperlakukan ≈ IDR.
+        for sym in (f"{quote}IDR", f"{quote}IDRT", f"{quote}BIDR"):
+            try:
+                rate = await self._public_ticker_price(sym)
+                if rate > 0:
+                    return {"rate": rate, "symbol": sym, "source": "Binance Spot"}
+            except Exception as exc:
+                logger.debug(f"Kurs IDR {sym} tidak tersedia: {exc}")
+
+        # Fallback Binance P2P untuk USDT/IDR, masih sumber Binance. Ini lebih
+        # sering tersedia daripada spot IDR pair di beberapa akun/region.
+        if quote == "USDT":
+            try:
+                rate = await self._public_p2p_usdt_idr_price()
+                if rate > 0:
+                    return {"rate": rate, "symbol": "USDTIDR", "source": "Binance P2P"}
+            except Exception as exc:
+                logger.debug(f"Kurs Binance P2P USDT/IDR tidak tersedia: {exc}")
+
+        # Jika quote bukan USDT, coba quoteUSDT x USDTIDR-like/P2P.
+        if quote != "USDT":
+            try:
+                quote_usdt = await self._public_ticker_price(f"{quote}USDT")
+                if quote_usdt > 0:
+                    for sym in ("USDTIDR", "USDTIDRT", "USDTBIDR"):
+                        try:
+                            usdt_idr = await self._public_ticker_price(sym)
+                            if usdt_idr > 0:
+                                return {
+                                    "rate": quote_usdt * usdt_idr,
+                                    "symbol": f"{quote}USDT*{sym}",
+                                    "source": "Binance Spot",
+                                }
+                        except Exception as exc:
+                            logger.debug(f"Kurs IDR {sym} tidak tersedia: {exc}")
+                    try:
+                        usdt_idr = await self._public_p2p_usdt_idr_price()
+                        if usdt_idr > 0:
+                            return {
+                                "rate": quote_usdt * usdt_idr,
+                                "symbol": f"{quote}USDT*USDTIDR",
+                                "source": "Binance P2P",
+                            }
+                    except Exception as exc:
+                        logger.debug(f"Kurs Binance P2P USDT/IDR tidak tersedia: {exc}")
+            except Exception as exc:
+                logger.debug(f"Kurs {quote}USDT tidak tersedia: {exc}")
+
+        return {"rate": 0.0, "symbol": "", "source": "Binance market unavailable"}
 
     async def get_klines(self, symbol: str, interval: str, limit: int) -> list[Candle]:
         enum_interval = _INTERVAL_MAP[interval][0]
@@ -628,6 +726,19 @@ class BinanceGateway(ExchangeGateway):
                 break
         return free, locked
 
+    async def get_base_balance(self, symbol: str) -> tuple[float, float]:
+        """Saldo base asset untuk pair, mis. SYNUSDT -> SYN."""
+        asset = symbol
+        if symbol.endswith(self.quote_asset):
+            asset = symbol[: -len(self.quote_asset)]
+        acct = await self._rest(self._client.rest_api.get_account)
+        free = locked = 0.0
+        for bal in acct.get("balances", []):
+            if bal.get("asset") == asset:
+                free, locked = _f(bal.get("free")), _f(bal.get("locked"))
+                break
+        return free, locked
+
     # -------------------------------------------------------------- trading
     async def market_buy(self, symbol: str, quote_qty: float) -> Fill:
         resp = await self._rest(self._client.rest_api.new_order,
@@ -652,18 +763,20 @@ class BinanceGateway(ExchangeGateway):
                                 symbol=symbol,
                                 side=NewOrderSideEnum("BUY"),
                                 type=NewOrderTypeEnum("LIMIT"),
-                                time_in_force=NewOrderNewOrderRespTypeEnum("GTC") and "GTC",
+                                time_in_force=NewOrderTimeInForceEnum("GTC"),
                                 quantity=qty, price=price)
         return int(_f(resp.get("orderId")))
 
     async def get_order_status(self, symbol: str, order_id: int) -> dict:
         resp = await self._rest(self._client.rest_api.get_order,
                                 symbol=symbol, order_id=order_id)
+        executed_qty = _f(resp.get("executedQty"))
+        quote_qty = _f(resp.get("cummulativeQuoteQty"))
         return {
             "status": resp.get("status", ""),
-            "executed_qty": _f(resp.get("executedQty")),
-            "avg_price": _f(resp.get("price")) or _f(resp.get("cummulativeQuoteQty")),
-            "quote_qty": _f(resp.get("cummulativeQuoteQty")),
+            "executed_qty": executed_qty,
+            "avg_price": (quote_qty / executed_qty) if executed_qty > 0 else _f(resp.get("price")),
+            "quote_qty": quote_qty,
         }
 
     async def cancel_order(self, symbol: str, order_id: int) -> bool:
@@ -719,8 +832,24 @@ class BinanceGateway(ExchangeGateway):
           - leg SL  : STOP_LOSS_LIMIT, trigger @ stop_price,
                       limit @ stop_price*(1-buffer) supaya tetap terisi
                       saat pasar jatuh cepat.
+
+        Semua harga harus mengikuti PRICE_FILTER Binance. Executor sudah
+        membulatkan TP dan stop trigger, tetapi stop-limit price dihitung di
+        sini dari buffer sehingga WAJIB ikut dibulatkan ke tick_size juga.
+        Tanpa ini Binance dapat menolak OCO dengan:
+        (-1013, 'Filter failure: PRICE_FILTER').
         """
-        sl_limit = stop_price * (1.0 - self._sl_limit_buffer_pct / 100.0)
+        filters = self._symbol_filters.get(symbol)
+        if filters:
+            tp_price = filters.round_price(tp_price, "up")
+            stop_price = filters.round_price(stop_price, "down")
+            sl_limit = filters.round_price(
+                stop_price * (1.0 - self._sl_limit_buffer_pct / 100.0),
+                "down",
+            )
+        else:
+            sl_limit = stop_price * (1.0 - self._sl_limit_buffer_pct / 100.0)
+
         resp = await self._rest(self._client.rest_api.order_oco,
                                 symbol=symbol,
                                 side=OrderOcoSideEnum("SELL"),
