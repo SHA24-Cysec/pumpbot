@@ -1,0 +1,295 @@
+# ============================================================================
+# PumpBot - SATU-SATUNYA Konfigurasi Strategi & Parameter
+# ============================================================================
+# Project hanya memakai file ini: config/config.yaml.
+# Ubah parameter dan mode di sini; tidak ada profile demo/example/live lain
+# atau override mode dari .env maupun command line.
+# ============================================================================
+
+# Mode operasi bot:
+#   paper   -> simulasi internal tanpa API key (DEFAULT dan paling aman)
+#   testnet -> Binance Spot Testnet (data & order palsu)
+#   live    -> uang sungguhan (hanya setelah testnet stabil)
+mode: testnet
+
+# Mata uang quote yang dipakai trading (semua pair berakhiran USDT)
+quote_asset: USDT
+
+# ----------------------------------------------------------------------------
+# UNIVERSE - pemilihan koin yang dipantau
+# ----------------------------------------------------------------------------
+universe:
+  # Jumlah koin maksimum yang dipantau sekaligus (batasi beban WebSocket & API).
+  # Diambil dari koin dengan volume 24 jam tertinggi yang lolos filter.
+  max_symbols: 40
+
+  # Volume quote 24 jam minimum (dalam satuan quote, 5_000_000 = 5 juta USDT)
+  # supaya tidak memantau koin yang terlalu sepi / mudah dimanipulasi.
+  min_quote_volume_24h: 10000000
+
+  # Daftar simbol manual (mis. ["BTCUSDT","BNBUSDT"]). Jika diisi,
+  # filter otomatis dilewati dan hanya simbol ini yang dipantau.
+  include_symbols: []
+
+  # Simbol yang selalu dikecualikan walau volumenya tinggi.
+  exclude_symbols: []
+
+  # Buang pair stabilcoin-vs-stabilcoin (USDCUSDT, FDUSDUSDT, dll) -
+  # harganya nyaris tidak bergerak, tidak relevan untuk deteksi pump.
+  exclude_stable_pairs: true
+
+  # Buang leveraged token (BTCUP, ETHDOWN, BNBBULL, dll) - mekanisme harga
+  # berbeda dan sering muncul "pump" palsu karena rebalancing harian.
+  exclude_leveraged_tokens: true
+
+  # Seberapa sering daftar koin di-refresh (menit).
+  refresh_minutes: 15
+
+# ----------------------------------------------------------------------------
+# DATA - sumber data & buffer
+# ----------------------------------------------------------------------------
+data:
+  # Interval candle untuk analisis sinyal.
+  kline_interval: 1m
+
+  # Jumlah candle historis yang diambil via REST saat start
+  # (untuk baseline rata-rata volume/trade sebelum WebSocket aktif).
+  history_candles: 120
+
+  # Level order book yang dilanggan via partial depth stream (5/10/20).
+  # 10 = hemat ~49% bandwidth orderbook vs 20.
+  depth_levels: 10
+
+  # Kecepatan update order book: 1000 (1 detik) atau 100 (100ms).
+  # 1000ms jauh lebih ringan untuk CPU; 100ms hanya jika butuh presisi tinggi.
+  depth_speed_ms: 1000
+
+  # Buffer trade di memori (rolling window).
+  trade_buffer_max: 5000      # maksimum jumlah trade yang disimpan per simbol
+  trade_window_sec: 600       # window analisis trade (10 menit)
+
+  # Berapa lama snapshot order book disimpan (untuk deteksi spoofing).
+  book_history_sec: 15
+
+# ----------------------------------------------------------------------------
+# SIGNAL ENGINE - deteksi peluang pump
+# ----------------------------------------------------------------------------
+signal:
+  # Skor gabungan minimum (0-100) sebelum bot boleh entry.
+  # 70 = cukup selektif. Turunkan (60) untuk lebih banyak sinyal.
+  score_threshold: 70
+
+  # Setelah exit, simbol ini "dinginkan" dulu selama X menit
+  # supaya tidak langsung masuk lagi di kondisi yang sama.
+  cooldown_after_exit_min: 15
+
+  # Seberapa sering skor dihitung ulang per simbol (detik).
+  reevaluate_sec: 3
+
+  # Data minimal sebelum simbol dinilai (candle 1m).
+  min_candles: 30
+
+  # ------------------- BOBOT TIAP DETECTOR -------------------
+  # Skor akhir = rata-rata tertimbang dari detector di bawah,
+  # dikurangi penalti manipulasi. Jumlah bobot bebas (dinormalisasi otomatis).
+  weights:
+    orderbook: 0.20       # ketimpangan bid/ask + deteksi wall
+    trade_flow: 0.15      # lonjakan frekuensi trade + tekanan beli
+    volume: 0.20          # lonjakan volume vs moving average
+    whale: 0.15           # transaksi bandar + deteksi spoofing
+    price_action: 0.30    # struktur tren, breakout, fibonacci (SINYAL UTAMA)
+
+  # ------------------- DETEKSI MANIPULASI (filter negatif) -------------------
+  manipulation:
+    # Seberapa kuat skor manipulasi mengurangi skor akhir (0 = mati, 1 = maksimal).
+    weight: 0.60
+    # Jika skor manipulasi >= nilai ini, koin langsung di-VETO (tidak akan entry).
+    veto_threshold: 0.70
+    # Perubahan harga 24 jam maksimum. Koin yang sudah naik >20% dalam sehari
+    # berisiko tinggi dump - bot tidak boleh mengejar puncak.
+    max_change_24h_pct: 20
+    # Pola pump-and-dump: naik >= 8% dalam window, lalu turun >= 40% dari kenaikan.
+    pump_dump_gain_pct: 8
+    pump_dump_pullback_pct: 40
+    pump_dump_window_min: 15
+    # Harga naik terlalu cepat 5 menit terakhir (>= 5%) = overextended,
+    # entry di titik seperti ini berisiko membeli di puncak.
+    overextended_5m_pct: 5
+    # Wash trading: volume naik >= 2x tapi rentang harga <= 0.4% (harga diam).
+    wash_volume_spike: 2.0
+    wash_range_pct: 0.4
+
+  # ------------------- DETECTOR ORDER BOOK -------------------
+  orderbook:
+    # Berapa level teratas yang dihitung untuk rasio bid/ask.
+    imbalance_levels: 10
+    # Skala sensitivitas: rasio bid 0.75 vs ask -> skor penuh (0.25 di atas netral 0.5).
+    imbalance_scale: 0.25
+    # Order dianggap "wall" jika qty-nya >= 10x median level lain.
+    wall_ratio: 10
+    # Wall dianggap relevan jika berada <= 1% dari harga pasar.
+    wall_near_pct: 1.0
+
+  # ------------------- DETECTOR FREKUENSI TRADE & LIKUIDITAS -------------------
+  trade_flow:
+    # Skala lonjakan: 4x rata-rata historis -> skor penuh.
+    spike_scale: 3.0
+    # Baseline rata-rata trade/menit dihitung dari X menit terakhir.
+    baseline_minutes: 60
+    # GATE wajib: spread maksimum (basis point). Lebih lebar dari ini = BATAL entry
+    # (slippage tinggi, likuiditas buruk). 15 bps = 0.15%.
+    max_spread_bps: 15
+
+  # ------------------- DETECTOR VOLUME -------------------
+  volume:
+    # Skala lonjakan: volume 4x rata-rata -> skor penuh.
+    spike_scale: 3.0
+    # Moving average volume (jumlah candle).
+    ma_period: 20
+
+  # ------------------- DETECTOR BANDAR / WHALE -------------------
+  whale:
+    # Trade dianggap whale jika nilainya >= 8x rata-rata ukuran trade pair tsb...
+    multiplier: 8
+    # ... DAN minimal sebesar ini (USDT), biar tidak salah bilang di pair sepi.
+    min_notional_usd: 10000
+    # Normalisasi skor: net beli whale 50rb USDT dalam 3 menit -> skor penuh.
+    net_normalize_usd: 50000
+    window_min: 3
+    # Spoofing: order >= 8x median muncul lalu hilang >= 80% dalam < 10 detik
+    # tanpa tersentuh harga -> indikasi wall palsu.
+    spoof_wall_ratio: 8
+    spoof_drop_pct: 0.8
+
+  # ------------------- DETECTOR PRICE ACTION & RETRACEMENT -------------------
+  price_action:
+    # Berapa candle terakhir yang dianalisis untuk struktur tren & swing.
+    structure_candles: 30
+    # Swing high/low = high/low yang lebih tinggi dari 2 candle di kiri-kanannya.
+    swing_neighbors: 2
+    # Breakout resistance = close > high tertinggi dari 20 candle sebelumnya.
+    breakout_lookback: 20
+    # Konfirmasi volume breakout: volume candle >= 1.5x MA20 volume.
+    breakout_vol_confirm: 1.5
+    # Zona retracement Fibonacci yang dianggap "golden zone" untuk entry aman.
+    fib_zone: [0.382, 0.618]
+    # Posisi harga di range 30 candle; >= 0.9 berarti menempel puncak.
+    near_top_pct: 0.9
+
+# ----------------------------------------------------------------------------
+# RISK MANAGEMENT - manajemen risiko (BACA SEBELUM UBAH!)
+# ----------------------------------------------------------------------------
+risk:
+  # Satu parameter risiko entry: persen dari BALANCE (bukan unrealized PnL).
+  # 1.0 berarti rugi target saat SL tersentuh adalah sekitar 1% balance.
+  risk_per_trade_pct: 1.0
+
+  # Default aman: satu posisi saja. Set true untuk mengizinkan hingga 3 pair.
+  allow_multiple_positions: false
+  max_open_positions: 3
+
+  # Opsional. Jika true, equity turun sebesar limit akan memblokir entry baru
+  # sampai 00:00 UTC. Posisi yang sudah ada tetap dikelola.
+  daily_loss_enabled: false
+  daily_loss_limit_pct: 3.0
+
+  # Estimasi fee taker Binance (%) untuk BE dan pencatatan PnL.
+  fee_pct: 0.1
+
+stops:
+  # Default SL tetap 1% di bawah entry. Mode structure tetap tersedia bila
+  # diperlukan, tetapi contoh strategi 1:2 menggunakan mode percent.
+  mode: percent
+  percent_pct: 1.0
+  structure_buffer_pct: 0.15
+  min_stop_pct: 0.5
+  max_stop_pct: 4.0
+
+take_profit:
+  # Satu TP berbasis risk:reward. rr 2 + SL 1% = TP 2% (1:2).
+  mode: rr
+  rr: 2.0
+
+breakeven:
+  enabled: true
+  # BE saat +1R, yaitu entry + 1 x jarak SL awal. Dengan TP 2R, BE aktif
+  # sebelum TP apa pun jarak SL yang digunakan.
+  trigger_rr: 1.0
+  # Buffer minimal 2x fee tetap dipakai agar BE tidak rugi karena biaya.
+  buffer_pct: 0.25
+
+trailing:
+  enabled: true
+  # Aktif otomatis segera setelah BE; SL mengikuti harga tertinggi - 0,5%.
+  mode: percent
+  percent_pct: 0.5
+  atr_period: 14
+  atr_multiplier: 2.5
+  update_step_pct: 0.15
+
+execution:
+  # Cara pasang exit order:
+  #   oco    -> pakai OCO (One-Cancels-Other) di exchange: TP limit + SL stop-limit.
+  #             Jika OCO gagal dipasang, otomatis fallback ke mode manual.
+  #   manual -> bot sendiri yang mengawasi harga lalu kirim market sell.
+  #             (bot mati = tidak ada proteksi SL di exchange!)
+  exit_mode: oco
+
+  # Jenis order entry: market (langsung tereksekusi) atau limit (lebih murah,
+  # tapi berisiko tidak terisi; order dibatalkan jika tidak isi dalam timeout).
+  entry_order_type: market
+  limit_entry_timeout_sec: 20
+
+  # SL stop-limit ditempatkan sedikit di bawah trigger agar pasti terisi
+  # saat pasar jatuh cepat (persen di bawah stop price).
+  oco_sl_limit_buffer_pct: 0.3
+
+  # Seberapa sering status OCO di-exchange direkonsiliasi (detik).
+  reconcile_sec: 5
+
+# ----------------------------------------------------------------------------
+# DASHBOARD WEB
+# ----------------------------------------------------------------------------
+dashboard:
+  host: 127.0.0.1
+  port: 8000
+
+# ----------------------------------------------------------------------------
+# DATABASE (SQLite). Untuk upgrade ke PostgreSQL nanti: lihat README bagian
+# "Upgrade ke PostgreSQL".
+# ----------------------------------------------------------------------------
+database:
+  # default -> otomatis data/pumpbot-live.db (dipisah per mode)
+  path: data/pumpbot.db
+
+# ----------------------------------------------------------------------------
+# LOGGING
+# ----------------------------------------------------------------------------
+logging:
+  level: INFO
+  file: logs/bot.log
+  max_bytes: 10485760   # 10 MB per file
+  backups: 5
+
+# ----------------------------------------------------------------------------
+# MODE PAPER / SIMULASI (hanya dipakai jika mode: paper)
+# ----------------------------------------------------------------------------
+paper:
+  start_equity: 10000   # modal awal simulasi (USDT)
+  symbols: 12           # jumlah simbol sintetis yang dibuat
+  time_scale: 1.0       # >1 = mempercepat waktu simulasi (10 = 1 menit jadi 6 detik)
+  seed: 42              # seed RNG supaya hasil simulasi bisa direproduksi
+
+# ----------------------------------------------------------------------------
+# DUST SWEEP - konversi sisa koin kecil menjadi BNB (opsional)
+# ----------------------------------------------------------------------------
+# Sisa qty pembulatan setelah semua TP terjual (nilainya di bawah
+# MIN_NOTIONAL, tidak bisa dijual biasa) otomatis dikonversi ke BNB
+# lewat endpoint resmi Binance "Convert Dust to BNB" (binance-sdk-wallet).
+# HANYA berjalan di mode LIVE (endpoint SAPI tidak tersedia di testnet).
+# ----------------------------------------------------------------------------
+dust_sweep:
+  # Nonaktif untuk mode paper. Aktifkan hanya ketika mode: live.
+  enabled: false
+  interval_minutes: 360     # jeda antar sweep (min 30 menit, jaga rate limit)
+  min_value_usd: 1.0        # aset bernilai di bawah ini (perkiraan) dianggap dust

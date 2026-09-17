@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PumpBot — Dashboard Trading</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#121826; --panel2:#0e1420; --line:#1e2735;
+    --text:#dce3f0; --muted:#8b98ab; --green:#2ecc71; --red:#e74c3c;
+    --blue:#3b82f6; --amber:#f59e0b; --purple:#a78bfa;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);
+       font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;padding:16px}
+  h1{font-size:20px;font-weight:700;letter-spacing:.5px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);
+     margin-bottom:8px}
+  .header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+          padding:12px 16px;background:var(--panel);border:1px solid var(--line);
+          border-radius:10px;margin-bottom:14px}
+  .badge{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700}
+  .badge.testnet{background:#1e3a8a;color:#93c5fd}
+  .badge.live{background:#7f1d1d;color:#fca5a5}
+  .badge.paper{background:#14532d;color:#86efac}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px}
+  .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .dot.off{background:var(--red)}
+  button{background:var(--panel2);color:var(--text);border:1px solid var(--line);
+         padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px}
+  button:hover{border-color:var(--blue)}
+  button.danger{border-color:#7f1d1d;color:#fca5a5}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+         gap:10px;margin-bottom:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:12px 14px}
+  .card .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;
+             letter-spacing:.6px}
+  .card .val{font-size:20px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
+  .card .sub{font-size:11px;color:var(--muted);margin-top:2px}
+  .pos{color:var(--green)} .neg{color:var(--red)} .mut{color:var(--muted)}
+  .grid{display:grid;grid-template-columns:2fr 1fr;gap:14px}
+  @media(max-width:1100px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+         padding:14px;margin-bottom:14px;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+  th{color:var(--muted);text-align:left;font-weight:600;padding:6px 8px;
+     border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+  td{padding:6px 8px;border-bottom:1px solid var(--line);
+     font-variant-numeric:tabular-nums}
+  tr:hover td{background:var(--panel2)}
+  .scroll{max-height:320px;overflow:auto}
+  .scorebar{height:6px;background:var(--panel2);border-radius:4px;overflow:hidden;
+            min-width:70px}
+  .scorebar>div{height:100%;border-radius:4px}
+  .sigrow{display:flex;align-items:center;gap:10px;padding:6px 4px;
+          border-bottom:1px solid var(--line);font-size:12.5px}
+  .sigrow .sym{font-weight:700;min-width:96px}
+  .sigrow .sc{min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
+  .sigrow .pr{color:var(--muted);min-width:86px;font-variant-numeric:tabular-nums}
+  .sigrow .flag{font-size:10px;padding:1px 6px;border-radius:6px}
+  .flag.veto{background:#7f1d1d;color:#fca5a5}
+  .flag.gate{background:#78350f;color:#fcd34d}
+  canvas{width:100%;height:220px;display:block}
+  .formrow{display:flex;align-items:center;justify-content:space-between;
+           gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
+  .formrow label{color:var(--muted);font-size:12.5px}
+  .formrow input{width:110px;background:var(--panel2);border:1px solid var(--line);
+                 color:var(--text);padding:5px 8px;border-radius:6px;
+                 font-variant-numeric:tabular-nums}
+  .formrow input[type=checkbox]{width:auto}
+  .toast{position:fixed;bottom:18px;right:18px;background:var(--panel2);
+         border:1px solid var(--line);border-radius:8px;padding:10px 16px;
+         font-size:13px;display:none;z-index:99}
+  .hint{font-size:11px;color:var(--muted);margin-top:6px}
+  .halt{background:#7f1d1d;color:#fecaca;padding:6px 10px;border-radius:8px;
+        font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+
+<!-- ================= HEADER ================= -->
+<div class="header">
+  <h1>🤖 PumpBot</h1>
+  <span class="badge" id="mode">—</span>
+  <span><span class="dot off" id="wsdot"></span><span id="wstxt" class="mut">menghubungkan…</span></span>
+  <span class="mut" id="uptime"></span>
+  <span class="mut" id="watch"></span>
+  <span style="flex:1"></span>
+  <button id="btnPause" class="primary">⏸ Pause Bot</button>
+</div>
+
+<!-- ================= KARTU RINGKASAN ================= -->
+<div class="cards">
+  <div class="card"><div class="lbl">Total Modal (Equity)</div>
+    <div class="val" id="equity">—</div><div class="sub" id="ret"></div></div>
+  <div class="card"><div class="lbl">Saldo Tersedia</div>
+    <div class="val" id="free">—</div><div class="sub" id="locked"></div></div>
+  <div class="card"><div class="lbl">Terkunci di Posisi</div>
+    <div class="val" id="inpos">—</div><div class="sub" id="npos"></div></div>
+  <div class="card"><div class="lbl">PnL Hari Ini</div>
+    <div class="val" id="daily">—</div><div class="sub" id="dailylim"></div></div>
+  <div class="card"><div class="lbl">Win Rate</div>
+    <div class="val" id="winrate">—</div><div class="sub" id="trades"></div></div>
+  <div class="card"><div class="lbl">Profit Factor</div>
+    <div class="val" id="pf">—</div><div class="sub" id="exp"></div></div>
+  <div class="card"><div class="lbl">Total PnL</div>
+    <div class="val" id="totalpnl">—</div><div class="sub" id="best"></div></div>
+  <div class="card"><div class="lbl">Max Drawdown</div>
+    <div class="val" id="mdd">—</div><div class="sub">dari equity curve</div></div>
+</div>
+
+<!-- ================= EQUITY CURVE ================= -->
+<div class="panel">
+  <h2>Equity Curve</h2>
+  <canvas id="curve"></canvas>
+</div>
+
+<div class="grid">
+  <div>
+    <!-- ================= POSISI TERBUKA ================= -->
+    <div class="panel">
+      <h2>Posisi Terbuka</h2>
+      <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Pair</th><th>Entry</th><th>Harga</th><th>Qty</th><th>Nilai</th>
+          <th>SL</th><th>TP</th><th>BE</th><th>Trail</th><th>PnL%</th><th>PnL</th>
+          <th>Mode</th><th></th>
+        </tr></thead>
+        <tbody id="positions"><tr><td colspan="13" class="mut">belum ada posisi</td></tr></tbody>
+      </table>
+      </div>
+    </div>
+
+    <!-- ================= HISTORI ================= -->
+    <div class="panel">
+      <h2>Histori Transaksi</h2>
+      <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Pair</th><th>Waktu Entry</th><th>Waktu Exit</th><th>Entry</th>
+          <th>Exit</th><th>Qty</th><th>PnL</th><th>Alasan Exit</th>
+        </tr></thead>
+        <tbody id="history"><tr><td colspan="8" class="mut">belum ada transaksi</td></tr></tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <!-- ================= PANEL SINYAL ================= -->
+    <div class="panel">
+      <h2>Panel Sinyal <span class="mut" style="text-transform:none">(skor detector)</span></h2>
+      <div class="scroll" id="signals"><div class="mut">menunggu data…</div></div>
+      <div class="hint">Bar = skor gabungan. Rincian per detector tampil saat hover.
+        Threshold entry ditentukan parameter skor minimum.</div>
+    </div>
+
+    <!-- ================= PARAMETER RISIKO LIVE ================= -->
+    <div class="panel">
+      <h2>Parameter Risiko (live)</h2>
+      <div id="params"></div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button id="btnSaveParams" class="primary">Simpan Parameter</button>
+      </div>
+      <div class="hint">Berlaku seketika tanpa restart. Default hanya satu posisi;
+        mode multi membatasi maksimal tiga pair berbeda. Semua perubahan tervalidasi
+        dan dicatat di log.</div>
+      <div id="paramErr" class="halt" style="display:none"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Skor per Detector (teratas)</h2>
+      <div id="det" class="mut" style="font-size:12px">—</div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+/* ============================================================
+   PumpBot Dashboard — vanilla JS, tanpa dependency eksternal.
+   Data masuk lewat WebSocket /ws (snapshot penuh tiap detik).
+   ============================================================ */
+
+const $ = id => document.getElementById(id);
+const fmt = (v, d=2) => (v===null||v===undefined||isNaN(v)) ? "—" :
+  Number(v).toLocaleString("id-ID",{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct = (v, d=2) => (v===null||v===undefined||isNaN(v)) ? "—" :
+  (v>=0?"+":"") + fmt(v,d) + "%";
+const cls = v => v>0 ? "pos" : (v<0 ? "neg" : "mut");
+const money = v => fmt(v,2);
+const ts = ms => ms ? new Date(ms).toLocaleTimeString("id-ID") : "—";
+const tsFull = ms => ms ? new Date(ms).toLocaleString("id-ID") : "—";
+
+let S = null;          // snapshot terakhir
+let paused = false;
+let toastTimer = null;
+
+function toast(msg, ok=true){
+  const t = $("toast");
+  t.textContent = msg;
+  t.style.borderColor = ok ? "var(--green)" : "var(--red)";
+  t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> t.style.display = "none", 3500);
+}
+
+async function api(path, body){
+  try{
+    const r = await fetch(path, {
+      method: body===undefined ? "GET" : "POST",
+      headers: {"Content-Type":"application/json"},
+      body: body===undefined ? undefined : JSON.stringify(body)
+    });
+    return await r.json();
+  }catch(e){ toast("Gagal terhubung ke server: "+e.message, false); return null; }
+}
+
+/* ---------------- RENDER ---------------- */
+
+function render(){
+  if(!S) return;
+  const b = S.balance, st = S.stats, d = S.daily;
+
+  $("mode").textContent = S.mode;
+  $("mode").className = "badge " + S.mode.toLowerCase();
+  $("uptime").textContent = "⏱ " + Math.floor(S.uptime_sec/60) + " m " + (S.uptime_sec%60) + " s";
+  $("watch").textContent = "👁 " + (S.watchlist?S.watchlist.length:0) + " simbol dipantau";
+
+  $("equity").textContent = money(b.equity) + " " + b.quote_asset;
+  $("ret").innerHTML = "sejak awal: <span class='"+cls(b.total_return_pct)+"'>"+
+                       pct(b.total_return_pct)+"</span> (modal awal "+money(b.start_equity)+")";
+  $("free").textContent = money(b.free);
+  $("locked").textContent = "terkunci order: " + money(b.locked);
+  $("inpos").textContent = money(b.in_positions);
+  $("npos").textContent = S.positions.length + " posisi terbuka";
+
+  $("daily").innerHTML = "<span class='"+cls(d.pnl)+"'>"+(d.pnl>=0?"+":"")+money(d.pnl)+"</span>";
+  $("dailylim").textContent = d.enabled
+    ? "batas rugi: -" + fmt(d.loss_limit_pct,1) + "% (reset " + (d.reset_timezone||"UTC") + ")" +
+      (d.halted ? " — HALT AKTIF" : "")
+    : "batas rugi harian: nonaktif";
+  $("daily").className = "val " + (d.halted ? "neg" : cls(d.pnl));
+
+  $("winrate").textContent = st.total_trades ? fmt(st.win_rate_pct,1)+"%" : "—";
+  $("trades").textContent = st.total_trades + " trade (" + st.wins + "W/" + st.losses + "L)";
+  $("pf").textContent = st.profit_factor===null ? "—" : st.profit_factor;
+  $("exp").textContent = "expectancy: " + money(st.expectancy);
+  $("totalpnl").innerHTML = "<span class='"+cls(st.total_pnl)+"'>"+
+    (st.total_pnl>=0?"+":"")+money(st.total_pnl)+"</span>";
+  $("best").textContent = "terbaik "+money(st.best_trade)+" / terburuk "+money(st.worst_trade);
+  $("mdd").textContent = fmt(st.max_dd_pct,2) + "%";
+
+  renderPositions();
+  renderHistory();
+  renderSignals();
+  drawCurve();
+  renderHalt();
+}
+
+function renderHalt(){
+  let el = document.getElementById("haltbanner");
+  if(S.daily.halted){
+    if(!el){
+      el = document.createElement("div");
+      el.id = "haltbanner"; el.className = "halt";
+      document.querySelector(".header").after(el);
+    }
+    el.textContent = "⛔ " + (S.daily.halt_reason || "Batas rugi harian tercapai — entry baru dihentikan sampai besok.");
+  } else if(el){ el.remove(); }
+}
+
+function renderPositions(){
+  const tb = $("positions");
+  if(!S.positions.length){
+    tb.innerHTML = "<tr><td colspan='13' class='mut'>belum ada posisi</td></tr>";
+    return;
+  }
+  tb.innerHTML = S.positions.map(p => {
+    const tps = (p.take_profits||[]).map(x=>x.toPrecision(6)).join(" / ");
+    return "<tr>"+
+      "<td><b>"+p.symbol+"</b></td>"+
+      "<td>"+p.entry_price.toPrecision(6)+"</td>"+
+      "<td>"+p.price.toPrecision(6)+"</td>"+
+      "<td>"+fmt(p.qty_remaining,4)+"</td>"+
+      "<td>"+money(p.value)+"</td>"+
+      "<td>"+p.stop_loss.toPrecision(6)+"</td>"+
+      "<td>"+tps+"</td>"+
+      "<td>"+(p.be_triggered?"✅":"—")+"</td>"+
+      "<td>"+(p.trail_active?"✅":"—")+"</td>"+
+      "<td class='"+cls(p.unrealized_pnl_pct)+"'>"+pct(p.unrealized_pnl_pct)+"</td>"+
+      "<td class='"+cls(p.unrealized_pnl)+"'>"+(p.unrealized_pnl>=0?"+":"")+money(p.unrealized_pnl)+"</td>"+
+      "<td class='mut' style='font-size:11px'>"+p.exit_mode+"</td>"+
+      "<td><button class='danger' onclick='closePos("+p.trade_id+")'>Tutup</button></td>"+
+      "</tr>";
+  }).join("");
+}
+
+function renderHistory(){
+  const tb = $("history");
+  if(!S.history.length){
+    tb.innerHTML = "<tr><td colspan='8' class='mut'>belum ada transaksi</td></tr>";
+    return;
+  }
+  tb.innerHTML = S.history.slice(0,100).map(t =>
+    "<tr>"+
+    "<td><b>"+t.symbol+"</b></td>"+
+    "<td>"+tsFull(t.entry_time)+"</td>"+
+    "<td>"+tsFull(t.exit_time)+"</td>"+
+    "<td>"+Number(t.entry_price).toPrecision(6)+"</td>"+
+    "<td>"+Number(t.exit_price||0).toPrecision(6)+"</td>"+
+    "<td>"+fmt(t.qty_total,4)+"</td>"+
+    "<td class='"+cls(t.realized_pnl)+"'>"+(t.realized_pnl>=0?"+":"")+money(t.realized_pnl)+"</td>"+
+    "<td class='mut'>"+(t.exit_reason||"")+"</td>"+
+    "</tr>").join("");
+}
+
+function scoreColor(sc){
+  if(sc>=70) return "var(--green)";
+  if(sc>=50) return "var(--amber)";
+  return "var(--blue)";
+}
+
+function renderSignals(){
+  const el = $("signals");
+  if(!S.signals || !S.signals.length){
+    el.innerHTML = "<div class='mut'>menunggu data…</div>";
+    $("det").textContent = "—";
+    return;
+  }
+  el.innerHTML = S.signals.map(s => {
+    const flag = s.veto ? "<span class='flag veto'>VETO</span>" :
+                 (s.eligible ? "" : "<span class='flag gate'>GATE</span>");
+    const bd = s.breakdown || {};
+    const title = Object.entries(bd).map(([k,v])=>k+": "+v).join("  |  ");
+    return "<div class='sigrow' title='"+title+"'>"+
+      "<span class='sym'>"+s.symbol+"</span>"+
+      "<span class='pr'>"+Number(s.price).toPrecision(6)+"</span>"+
+      "<div class='scorebar'><div style='width:"+Math.min(100,s.score)+"%;"+
+        "background:"+scoreColor(s.score)+"'></div></div>"+
+      "<span class='sc' style='color:"+scoreColor(s.score)+"'>"+Math.round(s.score)+"</span>"+
+      flag+"</div>";
+  }).join("");
+  // rincian detector simbol teratas
+  const top = S.signals[0];
+  if(top && top.breakdown){
+    $("det").innerHTML = "<b>"+top.symbol+"</b> — " +
+      Object.entries(top.breakdown)
+        .map(([k,v]) => k+"=<b>"+v+"</b>").join(", ");
+  }
+}
+
+/* ---------------- EQUITY CURVE (canvas) ---------------- */
+
+function drawCurve(){
+  const cv = $("curve"), ctx = cv.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w*dpr; cv.height = h*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+
+  const data = S.equity_curve || [];
+  if(data.length < 2){
+    ctx.fillStyle = "#8b98ab"; ctx.font = "13px sans-serif";
+    ctx.fillText("Belum cukup data equity (diambil tiap 30 detik)…", 12, h/2);
+    return;
+  }
+  const ys = data.map(d=>d[1]);
+  let lo = Math.min(...ys), hi = Math.max(...ys);
+  if(hi-lo < 1e-6){ hi = lo + 1; }
+  const pad = (hi-lo)*0.12; lo -= pad; hi += pad;
+  const X = i => 4 + i*(w-8)/(data.length-1);
+  const Y = v => 6 + (h-18)*(1-(v-lo)/(hi-lo));
+
+  // garis start equity (modal awal)
+  const se = S.balance.start_equity;
+  if(se>lo && se<hi){
+    ctx.strokeStyle="#334155"; ctx.setLineDash([4,4]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,Y(se)); ctx.lineTo(w,Y(se)); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // area + garis
+  const up = ys[ys.length-1] >= ys[0];
+  const col = up ? "#2ecc71" : "#e74c3c";
+  const grad = ctx.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0, up?"rgba(46,204,113,.28)":"rgba(231,76,60,.28)");
+  grad.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.beginPath(); ctx.moveTo(X(0),Y(ys[0]));
+  for(let i=1;i<ys.length;i++) ctx.lineTo(X(i),Y(ys[i]));
+  ctx.strokeStyle=col; ctx.lineWidth=2; ctx.stroke();
+  ctx.lineTo(X(ys.length-1),h); ctx.lineTo(X(0),h); ctx.closePath();
+  ctx.fillStyle=grad; ctx.fill();
+
+  // label min/max/terakhir
+  ctx.fillStyle="#8b98ab"; ctx.font="11px sans-serif";
+  ctx.fillText(fmt(hi,2), 6, 14);
+  ctx.fillText(fmt(lo,2), 6, h-6);
+  ctx.fillStyle=col;
+  ctx.fillText(fmt(ys[ys.length-1],2), w-70, Y(ys[ys.length-1])-6);
+}
+
+/* ---------------- PARAMETER RISIKO ---------------- */
+
+const PARAM_FIELDS = [
+  ["risk_per_trade_pct","Risiko per trade (% balance)","number","step=0.1"],
+  ["allow_multiple_positions","Izinkan multi-posisi","checkbox",""],
+  ["max_open_positions","Maks posisi saat multi aktif (1–3)","number","step=1 min=1 max=3"],
+  ["daily_loss_enabled","Aktifkan batas rugi harian (UTC)","checkbox",""],
+  ["daily_loss_limit_pct","Batas rugi harian (%)","number","step=0.5"],
+  ["score_threshold","Skor minimum sinyal","number","step=1"],
+  ["trailing_enabled","Trailing stop aktif","checkbox",""],
+  ["breakeven_enabled","Breakeven aktif","checkbox",""],
+];
+
+function renderParams(){
+  const el = $("params");
+  api("/api/params").then(p => {
+    if(!p) return;
+    el.innerHTML = PARAM_FIELDS.map(([k,lbl,type,extra]) => {
+      if(type==="checkbox"){
+        return "<div class='formrow'><label>"+lbl+"</label>"+
+          "<input type='checkbox' id='p_"+k+"' "+(p[k]?"checked":"")+"></div>";
+      }
+      return "<div class='formrow'><label>"+lbl+"</label>"+
+        "<input type='"+type+"' id='p_"+k+"' value='"+p[k]+"' "+extra+"></div>";
+    }).join("");
+  });
+}
+
+$("btnSaveParams").onclick = async () => {
+  const body = {};
+  for(const [k,,type] of PARAM_FIELDS){
+    const el = $("p_"+k);
+    if(!el) continue;
+    body[k] = type==="checkbox" ? el.checked : parseFloat(el.value);
+  }
+  const r = await api("/api/params", body);
+  if(!r) return;
+  const errEl = $("paramErr");
+  if(r.ok){
+    errEl.style.display = "none";
+    toast("Parameter tersimpan & aktif ✅");
+    renderParams();
+  } else {
+    errEl.style.display = "block";
+    errEl.textContent = "❌ " + (r.errors||[]).join("; ");
+  }
+};
+
+/* ---------------- KONTROL ---------------- */
+
+window.closePos = async (id) => {
+  if(!confirm("Tutup posisi #" + id + " sekarang (market sell)?")) return;
+  const r = await api("/api/control/close", {trade_id:id, fraction:1.0});
+  if(r && r.ok) toast("Posisi #" + id + " ditutup");
+  else toast("Gagal menutup posisi", false);
+};
+
+function setPauseUI(){
+  const btn = $("btnPause");
+  btn.textContent = paused ? "▶ Resume Bot" : "⏸ Pause Bot";
+  btn.className = paused ? "primary" : "danger";
+}
+
+$("btnPause").onclick = async () => {
+  const r = await api("/api/control/pause", {paused: !paused});
+  if(r && r.ok){ paused = !paused; setPauseUI(); toast(paused?"Bot di-pause":"Bot resume"); }
+};
+
+/* ---------------- WEBSOCKET ---------------- */
+
+function connect(){
+  const proto = location.protocol==="https:" ? "wss" : "ws";
+  const ws = new WebSocket(proto+"://"+location.host+"/ws");
+  ws.onopen = () => {
+    $("wsdot").className = "dot on";
+    $("wstxt").textContent = "terhubung";
+  };
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if(msg.type === "snapshot"){
+      S = msg;
+      if(typeof msg.paused === "boolean" && msg.paused !== paused){
+        paused = msg.paused; setPauseUI();
+      }
+      render();
+    }
+  };
+  ws.onclose = () => {
+    $("wsdot").className = "dot off";
+    $("wstxt").textContent = "terputus — mencoba ulang…";
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = () => ws.close();
+}
+
+window.addEventListener("resize", ()=>{ if(S) drawCurve(); });
+setPauseUI();
+renderParams();
+connect();
+</script>
+</body>
+</html>

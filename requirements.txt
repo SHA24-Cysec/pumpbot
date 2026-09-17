@@ -1,0 +1,24 @@
+# ============================================================
+# PumpBot - Binance Spot Pump Detector & Auto Trading Bot
+# Python 3.10+
+# ============================================================
+
+# SDK resmi Binance (modular, pengganti binance-connector yang sudah deprecated)
+binance-sdk-spot>=11.0.0,<12.0.0
+
+# Dashboard web real-time
+fastapi>=0.110
+uvicorn>=0.29
+
+# Konfigurasi
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=8.0
+
+# Dependency SDK (dipasang otomatis oleh binance-sdk-spot, ditulis eksplisit untuk kejelasan):
+#   requests, websockets, aiohttp, pycryptodome, binance-common
+
+# Dust sweep ke BNB (endpoint wallet/SAPI; hanya dipakai mode live)
+binance-sdk-wallet>=13.0.0

@@ -1,0 +1,17 @@
+#_rahasia
+.env
+*.env
+
+# database & log
+data/
+logs/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
