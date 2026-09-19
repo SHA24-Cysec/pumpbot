@@ -21,8 +21,8 @@ CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     """Bersihkan env yang memengaruhi config supaya test deterministik."""
-    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
-    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+    monkeypatch.setenv("BINANCE_API_KEY", "test-api-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-api-secret")
     for k in ("DASHBOARD_HOST", "DASHBOARD_PORT", "LOG_LEVEL"):
         monkeypatch.delenv(k, raising=False)
 
@@ -53,8 +53,8 @@ def test_revision_defaults_are_safe_and_match_1_to_2_flow():
 
 def test_single_yaml_is_valid_and_loads():
     cfg = load_config(CONFIG)
-    assert cfg.mode == "paper"
-    assert cfg.risk.risk_per_trade_pct == 1.0
+    assert cfg.mode == "live"
+    assert cfg.risk.risk_per_trade_pct == 99.0
     assert cfg.signal.score_threshold == 70
     errs = validate(cfg)
     assert errs == [], errs

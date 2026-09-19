@@ -90,7 +90,7 @@ class BotApp:
         try:
             # binance-sdk-wallet = SDK modular resmi Binance untuk endpoint
             # wallet/SAPI (dipisah dari binance-sdk-spot). Dipasang lewat
-            # requirements.txt; impor lazy supaya mode paper/testnet tetap
+            # requirements.txt; impor lazy supaya mode testnet tetap
             # jalan walau paket tidak terpasang.
             from binance_sdk_wallet import Wallet
             from binance_common.configuration import ConfigurationRestAPI
@@ -121,17 +121,6 @@ class BotApp:
 
     # ------------------------------------------------------------------
     def _build_gateway(self):
-        if self.cfg.mode == "paper":
-            from bot.exchange.simulated_gateway import SimulatedGateway
-            return SimulatedGateway(
-                start_equity=self.cfg.paper.start_equity,
-                symbols=self.cfg.paper.symbols,
-                time_scale=self.cfg.paper.time_scale,
-                seed=self.cfg.paper.seed,
-                quote_asset=self.cfg.quote_asset,
-                fee_pct=self.cfg.risk.fee_pct,
-                sl_limit_buffer_pct=self.cfg.execution.oco_sl_limit_buffer_pct,
-            )
         from bot.exchange.binance_gateway import BinanceGateway
         return BinanceGateway(
             mode=self.cfg.mode,

@@ -64,7 +64,7 @@ def _detail(asset, amount, to_btc):
 
 @pytest.fixture()
 def cfg():
-    c = load_config(_CFG)          # mode paper -> tidak butuh API key
+    c = load_config(_CFG)          # mode testnet/live
     return c
 
 

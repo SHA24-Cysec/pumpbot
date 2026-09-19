@@ -7,7 +7,6 @@
 # ============================================================================
 
 # Mode operasi bot:
-#   paper   -> simulasi internal tanpa API key (DEFAULT dan paling aman)
 #   testnet -> Binance Spot Testnet (data & order palsu)
 #   live    -> uang sungguhan (hanya setelah testnet stabil)
 mode: live
@@ -274,15 +273,6 @@ logging:
   backups: 5
 
 # ----------------------------------------------------------------------------
-# MODE PAPER / SIMULASI (hanya dipakai jika mode: paper)
-# ----------------------------------------------------------------------------
-paper:
-  start_equity: 10000   # modal awal simulasi (USDT)
-  symbols: 12           # jumlah simbol sintetis yang dibuat
-  time_scale: 1.0       # >1 = mempercepat waktu simulasi (10 = 1 menit jadi 6 detik)
-  seed: 42              # seed RNG supaya hasil simulasi bisa direproduksi
-
-# ----------------------------------------------------------------------------
 # DUST SWEEP - konversi sisa koin kecil menjadi BNB (opsional)
 # ----------------------------------------------------------------------------
 # Sisa qty pembulatan setelah semua TP terjual (nilainya di bawah
@@ -291,7 +281,6 @@ paper:
 # HANYA berjalan di mode LIVE (endpoint SAPI tidak tersedia di testnet).
 # ----------------------------------------------------------------------------
 dust_sweep:
-  # Nonaktif untuk mode paper. Aktifkan hanya ketika mode: live.
   enabled: true
   interval_minutes: 360     # jeda antar sweep (min 30 menit, jaga rate limit)
   min_value_usd: 1.0        # aset bernilai di bawah ini (perkiraan) dianggap dust

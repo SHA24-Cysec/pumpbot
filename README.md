@@ -21,7 +21,7 @@ tidak dipakai di sini.
 > **Bot ini menyangkut uang sungguhan.**
 > - Wajib diuji di **testnet** (atau mode `paper`) sampai stabil sebelum live.
 > - **Tidak ada strategi trading yang pasti profit.** Deteksi pump bukan
->   jaminan; pump sering diikuti dump. Backtest & forward test dulu dengan
+>   jaminan; pump sering diikuti dump. Forward test dulu dengan
 >   modal kecil.
 > - Risiko sepenuhnya tanggung jawab Anda. Gunakan modal yang siap Anda rugikan.
 > - Author tidak bertanggung jawab atas kerugian apa pun.
@@ -41,7 +41,6 @@ tidak dipakai di sini.
 9. [Manajemen Risiko (Revisi)](#manajemen-risiko-revisi)
 10. [Testing](#testing)
 11. [Dust Sweep](#dust-sweep-konversi-sisa-koin-kecil-ke-bnb)
-11. [Mode Paper / Simulasi](#mode-paper--simulasi)
 12. [Pemulihan Setelah Restart](#pemulihan-setelah-restart)
 13. [Upgrade ke PostgreSQL](#upgrade-ke-postgresql)
 14. [Troubleshooting / FAQ](#troubleshooting--faq)
@@ -116,7 +115,6 @@ pumpbot/
 │   ├── exchange/
 │   │   ├── gateway.py          # interface exchange (abstrak)
 │   │   ├── binance_gateway.py  # implementasi binance-sdk-spot (REST+WS)
-│   │   └── simulated_gateway.py# simulator pasar + paper trading
 │   ├── data_collector/
 │   │   ├── buffers.py          # rolling buffer per simbol
 │   │   └── collector.py        # watchlist + langganan stream + seed REST
@@ -342,38 +340,13 @@ Urutan ringkas untuk entry 100, SL 99 dan TP 102:
 python -m pytest tests/ -v
 ```
 
-117 unit test mencakup: position sizing (risiko tidak pernah melebihi target),
+113 unit test mencakup: position sizing (risiko tidak pernah melebihi target),
 pembulatan LOT_SIZE/MIN_NOTIONAL, SL awal struktur/persen, level TP,
 trigger & harga breakeven, trailing monoton, ATR, statistik (win rate, profit
 factor, max drawdown), seluruh detector (skor/gate/veto), validasi
-konfigurasi, plus dua test end-to-end executor di atas simulator paper:
+konfigurasi, plus dua test end-to-end executor:
 race-condition "re-place OCO vs tutup posisi manual" (anti OCO yatim/penjualan
 ganda) dan jalur exit stop-loss beserta konsistensi akuntansi dana.
-
-## Analisis Parameter (Backtest klines)
-
-Folder `tools/backtest/` berisi tool analisis sensitivitas parameter
-(grid search + walk-forward, prioritas drawdown) berbasis klines 1m
-historis — memakai detektor/SL/TP/sizing kode bot asli. Lihat
-`tools/backtest/README.md`. Batasan: hanya 3 dari 6 detektor yang bisa
-diuji dari klines (orderbook & whale tidak bisa), jadi hasilnya untuk
-memahami area robust parameter, bukan kalibrasi final — validasi tetap
-lewat testnet.
-
-## Mode Paper / Simulasi
-
-```bash
-# Pastikan config/config.yaml berisi: mode: paper
-python run.py
-```
-
-Atur `paper.start_equity`, `paper.symbols`, dan `paper.time_scale` langsung
-di `config/config.yaml` bila ingin mengubah simulasi.
-
-Simulator membuat pasar sintetis dengan rezim NORMAL / PUMP / DUMP (±55% pump
-diikuti dump — untuk menguji detektor manipulasi), whale trade, wall order,
-dan spoofing. Order dieksekusi sebagai paper trading (fee 0.1% + slippage).
-Cocok untuk memverifikasi seluruh pipeline & dashboard tanpa risiko apa pun.
 
 ## Pemulihan Setelah Restart
 
@@ -451,7 +424,7 @@ Perbaiki sesuai pesan error — daftar lengkapnya dalam pesan tersebut.
 **Ingin mulai statistik dari nol**
 Hentikan bot lalu hapus file DB mode yang bersangkutan — sejak pemisahan
 otomatis, tiap mode punya file sendiri: `data/pumpbot-testnet.db`,
-`data/pumpbot-live.db`, atau `data/pumpbot-paper.db` (path default
+`data/pumpbot-live.db` (path default
 `data/pumpbot.db` di config otomatis diarahkan ke sana; histori lama di
 file `data/pumpbot.db` peninggalan versi sebelumnya bisa dipertahankan
 untuk testnet dengan `mv data/pumpbot.db data/pumpbot-testnet.db`).

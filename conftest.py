@@ -21,13 +21,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 @pytest.fixture(autouse=True)
 def _isolasi_dotenv(monkeypatch):
-    """Netralkan load_dotenv() selama test berjalan.
-
-    Semua test harus deterministik: hasilnya tidak boleh berubah hanya
-    karena ada .env (berisi API key testnet/live) di folder project.
-    """
+    """Isolasi test dari .env dan sediakan kredensial dummy untuk validasi."""
+    monkeypatch.setenv("BINANCE_API_KEY", "test-api-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-api-secret")
     try:
         import dotenv
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **kw: False)
     except ImportError:
-        return  # dotenv tidak terpasang -> load_config memang skip .env
-    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **kw: False)
+        pass

@@ -219,14 +219,6 @@ class LoggingCfg:
 
 
 @dataclass
-class PaperCfg:
-    start_equity: float = 10_000
-    symbols: int = 12
-    time_scale: float = 1.0
-    seed: int = 42
-
-
-@dataclass
 class DustSweepCfg:
     """
     Konversi berkala sisa koin kecil (dust) menjadi BNB.
@@ -239,8 +231,7 @@ class DustSweepCfg:
 
 @dataclass
 class Config:
-    # Safety default: konfigurasi tunggal memulai di simulator internal.
-    mode: str = "paper"
+    mode: str = "live"
     quote_asset: str = "USDT"
     universe: UniverseCfg = field(default_factory=UniverseCfg)
     data: DataCfg = field(default_factory=DataCfg)
@@ -254,7 +245,6 @@ class Config:
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     database: DatabaseCfg = field(default_factory=DatabaseCfg)
     logging: LoggingCfg = field(default_factory=LoggingCfg)
-    paper: PaperCfg = field(default_factory=PaperCfg)
     dust_sweep: DustSweepCfg = field(default_factory=DustSweepCfg)
 
 
@@ -267,7 +257,7 @@ _SUBDATACLASS_FIELDS = {
     "risk": RiskCfg, "stops": StopsCfg, "take_profit": TakeProfitCfg,
     "breakeven": BreakevenCfg, "trailing": TrailingCfg,
     "execution": ExecutionCfg, "dashboard": DashboardCfg,
-    "database": DatabaseCfg, "logging": LoggingCfg, "paper": PaperCfg,
+    "database": DatabaseCfg, "logging": LoggingCfg,
     "dust_sweep": DustSweepCfg,
 }
 
@@ -390,8 +380,8 @@ def validate(cfg: Config) -> list[str]:
     errors: list[str] = []
 
     # --- mode & aset ---
-    if cfg.mode not in ("testnet", "live", "paper"):
-        errors.append(f"mode harus 'testnet' | 'live' | 'paper' (dapat '{cfg.mode}')")
+    if cfg.mode not in ("testnet", "live"):
+        errors.append(f"mode harus 'testnet' | 'live' (dapat '{cfg.mode}')")
     if not cfg.quote_asset or not cfg.quote_asset.isalpha():
         errors.append("quote_asset harus nama aset yang valid, mis. 'USDT'")
     if cfg.mode in ("testnet", "live"):
@@ -574,11 +564,4 @@ def validate(cfg: Config) -> list[str]:
     # --- lain-lain ---
     if not 1 <= cfg.dashboard.port <= 65535:
         errors.append("dashboard.port harus port yang valid (1..65535)")
-    if cfg.paper.time_scale <= 0:
-        errors.append("paper.time_scale harus > 0")
-    if cfg.paper.start_equity <= 0:
-        errors.append("paper.start_equity harus > 0")
-    if cfg.paper.symbols < 1:
-        errors.append("paper.symbols minimal 1")
-
     return errors

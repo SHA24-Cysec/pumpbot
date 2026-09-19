@@ -26,12 +26,8 @@ class TestResolveDbPath:
         assert resolve_db_path("live", "data/pumpbot.db") == \
             "data/pumpbot-live.db"
 
-    def test_default_paper(self):
-        assert resolve_db_path("paper", "data/pumpbot.db") == \
-            "data/pumpbot-paper.db"
-
     def test_path_custom_tidak_diubah(self):
-        for mode in ("testnet", "live", "paper"):
+        for mode in ("testnet", "live"):
             assert resolve_db_path(mode, "data/custom.db") == "data/custom.db"
             assert resolve_db_path(mode, "data/pumpbot-live.db") == \
                 "data/pumpbot-live.db"
@@ -42,10 +38,10 @@ class TestResolveDbPath:
 
 
 class TestSingleConfigIntegration:
-    def test_config_satu_satunya_memulai_paper_dengan_db_terpisah(self):
+    def test_config_satu_satunya_memulai_live_dengan_db_terpisah(self):
         cfg = load_config(_CONFIG)
-        assert cfg.mode == "paper"
-        assert cfg.database.path == "data/pumpbot-paper.db"
+        assert cfg.mode == "live"
+        assert cfg.database.path == "data/pumpbot-live.db"
 
 
 if __name__ == "__main__":
