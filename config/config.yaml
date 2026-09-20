@@ -49,7 +49,7 @@ universe:
 # ----------------------------------------------------------------------------
 data:
   # Interval candle untuk analisis sinyal.
-  kline_interval: 1m
+  kline_interval: 5m
 
   # Jumlah candle historis yang diambil via REST saat start
   # (untuk baseline rata-rata volume/trade sebelum WebSocket aktif).
