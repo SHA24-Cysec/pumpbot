@@ -348,6 +348,11 @@ konfigurasi, plus dua test end-to-end executor:
 race-condition "re-place OCO vs tutup posisi manual" (anti OCO yatim/penjualan
 ganda) dan jalur exit stop-loss beserta konsistensi akuntansi dana.
 
+## Backtest & Optimasi Parameter Exit
+
+Cari kombinasi SL, TP, breakeven, dan trailing terbaik dari data klines publik:
+lihat [tools/backtest/README.md](tools/backtest/README.md).
+
 ## Pemulihan Setelah Restart
 
 Bot mencatat semua posisi ke SQLite. Saat dinyalakan ulang:

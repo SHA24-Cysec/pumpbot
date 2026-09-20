@@ -22,3 +22,7 @@ pytest>=8.0
 
 # Dust sweep ke BNB (endpoint wallet/SAPI; hanya dipakai mode live)
 binance-sdk-wallet>=13.0.0
+
+# Progress bar untuk tools backtest (opsional; tools tetap jalan dengan
+# log baris biasa bila modul ini tidak terpasang)
+rich>=13.0

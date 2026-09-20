@@ -1,12 +1,15 @@
 """
-Test offline utk _top_symbols (tools/backtest/download.py) dan
-BinanceGateway.get_universe — memastikan pendekatan "exchangeInfo ->
-ticker24hr(symbols=[...]) per kelompok 100" berfungsi untuk SEMUA bentuk
-respons SDK (model pydantic via to_dict, dict, maupun fallback raw list).
+Test offline untuk BinanceGateway.get_universe: memastikan pendekatan
+"exchangeInfo -> ticker24hr(symbols=[...]) per kelompok 100" berfungsi untuk
+SEMUA bentuk respons SDK (model pydantic via to_dict, dict, maupun fallback
+raw list).
 
-Latar belakang: ticker/24hr tanpa parameter adalah jalur lama; di
-production responsnya tidak lagi dijamin dict sehingga 'tuple' object
-has no attribute 'get' terjadi. Test ini memvalidasi jalur pengganti.
+Latar belakang: ticker/24hr tanpa parameter adalah jalur lama; di production
+responsnya tidak lagi dijamin dict sehingga 'tuple' object has no attribute
+'get' terjadi. Test ini memvalidasi jalur pengganti.
+
+Catatan: test untuk downloader backtest kini ada di
+tests/test_backtest_download.py (downloader baru memakai urllib, bukan SDK).
 """
 
 from __future__ import annotations
@@ -15,16 +18,9 @@ import asyncio
 import os
 import sys
 import unittest
-from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),
                                                 "..")))
-# download.py meng-import _bootstrap (konstanta path) -> butuh path ke
-# tools/backtest juga
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),
-                                                "..", "tools", "backtest")))
-
-from tools.backtest import download  # noqa: E402
 
 
 class _FakeApiResponse:
@@ -88,80 +84,6 @@ class _FakeRestAPI:
 class _FakeClient:
     def __init__(self, ticker_rows, chunk_calls):
         self.rest_api = _FakeRestAPI(ticker_rows, chunk_calls)
-
-
-class TestTopSymbols(unittest.TestCase):
-    def test_chunked_ticker_models_sorted_and_filtered(self):
-        # 250 pair -> wajib terpotong jadi 3 chunk (100/100/50)
-        rows = {f"COIN{i:03d}USDT": 1_000_000 - i for i in range(250)}
-        client = _FakeClient(rows, None)
-        with patch.object(download, "_client", lambda base=None: client):
-            top = download._top_symbols(20, "USDT")
-
-        self.assertEqual(len(client.rest_api.ticker_chunks), 3)
-        self.assertEqual(
-            [len(c) for c in client.rest_api.ticker_chunks], [100, 100, 50])
-        # urut descending by quote volume, non-dict row di-skip tanpa crash
-        self.assertEqual(top, [f"COIN{i:03d}USDT" for i in range(20)])
-        # simbol eksotis TIDAK boleh ikut dikirim (memicu -1100 di server)
-        all_sent = [s for c in client.rest_api.ticker_chunks for s in c]
-        for bad in ("币安人生USDT", "牛来USDT", "ethusdt"):
-            self.assertNotIn(bad, all_sent)
-
-    def test_raw_dict_rows_also_supported(self):
-        # jalur fallback: .data() sudah list of dict murni
-        class _RawClient:
-            rest_api = type("R", (), {
-                "exchange_info": lambda self: _FakeApiResponse(
-                    {"symbols": [{"symbol": "AAAUSDT", "status": "TRADING"},
-                                 {"symbol": "BBBUSDT", "status": "TRADING"}]}),
-                "ticker24hr": lambda self, symbols=None: _FakeApiResponse([
-                    {"symbol": "AAAUSDT", "quoteVolume": "5"},
-                    {"symbol": "BBBUSDT", "quoteVolume": "50"},
-                ]),
-            })()
-        with patch.object(download, "_client", lambda base=None: _RawClient()):
-            top = download._top_symbols(1, "USDT")
-        self.assertEqual(top, ["BBBUSDT"])
-
-    def test_empty_universe_raises_or_empty(self):
-        class _EmptyClient:
-            rest_api = type("R", (), {
-                "exchange_info": lambda self: _FakeApiResponse(
-                    {"symbols": []}),
-                "ticker24hr": lambda self, symbols=None: _FakeApiResponse([]),
-            })()
-        with patch.object(download, "_client", lambda base=None: _EmptyClient()):
-            self.assertEqual(download._top_symbols(5, "USDT"), [])
-
-    def test_http_400_fast_fail_with_server_message(self):
-        """400 = permanen -> RuntimeError LANGSUNG (tanpa 5x retry),
-        pesan asli server ikut ditampilkan utk diagnosis."""
-        class BadRequestError(Exception):      # nama kelas = deteksi _retry
-            def __init__(self, msg, code):
-                self.error_message = msg
-                self.status_code = code
-
-        calls = {"n": 0}
-
-        def _reject(self, symbols=None):
-            calls["n"] += 1
-            raise BadRequestError("Illegal characters in 'symbols'", -1100)
-
-        class _RejectClient:
-            rest_api = type("R", (), {
-                "exchange_info": lambda self: _FakeApiResponse(
-                    {"symbols": [{"symbol": "AAAUSDT", "status": "TRADING"}]}),
-                "ticker24hr": _reject,
-            })()
-
-        with patch.object(download, "_client",
-                          lambda base=None: _RejectClient()):
-            with self.assertRaises(RuntimeError) as cm:
-                download._top_symbols(5, "USDT")
-        self.assertEqual(calls["n"], 1)          # TIDAK di-retry 5x
-        self.assertIn("Illegal characters", str(cm.exception))
-        self.assertIn("-1100", str(cm.exception))
 
 
 class TestGetUniverseChunking(unittest.TestCase):
