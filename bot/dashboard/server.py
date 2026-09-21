@@ -52,6 +52,7 @@ class ParamsBody(BaseModel):
     score_threshold: Optional[float] = None
     trailing_enabled: Optional[bool] = None
     breakeven_enabled: Optional[bool] = None
+    vwap_filter_enabled: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------

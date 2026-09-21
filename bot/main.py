@@ -144,10 +144,11 @@ class BotApp:
         notify(f"⏸ Bot {'di-pause' if paused else 'resume'}.")
 
     def apply_runtime_flags(self) -> None:
-        """Terapkan parameter live (threshold, trailing, breakeven) ke modul."""
+        """Terapkan parameter live (threshold, trailing, breakeven, VWAP)."""
         self.cfg.trailing.enabled = self.risk.params.trailing_enabled
         self.cfg.breakeven.enabled = self.risk.params.breakeven_enabled
         self.engine._override_threshold = self.risk.params.score_threshold
+        self.engine.vwap_enabled_override = self.risk.params.vwap_filter_enabled
 
     # ------------------------------------------------------------------
     # Pemulihan posisi setelah restart

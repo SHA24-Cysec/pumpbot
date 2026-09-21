@@ -38,6 +38,8 @@ class RuntimeParams:
     score_threshold: float
     trailing_enabled: bool
     breakeven_enabled: bool
+    # Filter Anchored VWAP (gate entry); false = perilaku tanpa filter.
+    vwap_filter_enabled: bool = False
 
     @property
     def effective_open_position_limit(self) -> int:
@@ -62,6 +64,7 @@ class RiskManager:
             score_threshold=cfg.signal.score_threshold,
             trailing_enabled=cfg.trailing.enabled,
             breakeven_enabled=cfg.breakeven.enabled,
+            vwap_filter_enabled=cfg.signal.vwap.enabled,
         )
         self._lock = threading.Lock()
 
@@ -79,6 +82,7 @@ class RiskManager:
         bool_keys = {
             "allow_multiple_positions", "daily_loss_enabled",
             "trailing_enabled", "breakeven_enabled",
+            "vwap_filter_enabled",
         }
         int_keys = {"max_open_positions"}
 

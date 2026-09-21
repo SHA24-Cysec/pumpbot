@@ -109,6 +109,29 @@ class PriceActionCfg:
 
 
 @dataclass
+class VWAPCfg:
+    """
+    Filter entry Anchored VWAP (bukan sumber skor).
+
+    Semua parameter berjumlah CANDLE, jadi pada kline_interval 1m satu candle
+    sama dengan satu menit. Default dataclass sengaja enabled=False supaya
+    perilaku tanpa blok YAML identik dengan versi sebelum filter ada.
+    """
+    enabled: bool = False
+    anchor_mode: str = "pump_start"       # pump_start | impulse_low | manual
+    anchor_lookback_candles: int = 60
+    pump_volume_mult: float = 3.0
+    pump_baseline_candles: int = 20
+    pump_max_gap_candles: int = 3
+    no_anchor_action: str = "impulse_low"  # impulse_low | block
+    manual_anchors: dict = field(default_factory=dict)
+    min_above_pct: float = 0.0
+    max_above_pct: float = 8.0
+    min_anchor_candles: int = 3
+    on_insufficient_data: str = "block"    # block | allow
+
+
+@dataclass
 class SignalCfg:
     score_threshold: float = 70.0
     cooldown_after_exit_min: int = 15
@@ -124,6 +147,7 @@ class SignalCfg:
     volume: VolumeCfg = field(default_factory=VolumeCfg)
     whale: WhaleCfg = field(default_factory=WhaleCfg)
     price_action: PriceActionCfg = field(default_factory=PriceActionCfg)
+    vwap: VWAPCfg = field(default_factory=VWAPCfg)
 
 
 @dataclass
@@ -268,6 +292,7 @@ _NESTED = {
     ("signal", "volume"): VolumeCfg,
     ("signal", "whale"): WhaleCfg,
     ("signal", "price_action"): PriceActionCfg,
+    ("signal", "vwap"): VWAPCfg,
 }
 
 
@@ -473,6 +498,50 @@ def validate(cfg: Config) -> list[str]:
         errors.append("signal.price_action.breakout_lookback minimal 5")
     if len(pa.fib_zone) != 2 or not (0 < pa.fib_zone[0] < pa.fib_zone[1] < 1):
         errors.append("signal.price_action.fib_zone harus [lower, upper] dengan 0 < lower < upper < 1")
+
+    # --- filter anchored vwap (gate entry, bukan skor) ---
+    v = s.vwap
+    if not isinstance(v.enabled, bool):
+        errors.append("signal.vwap.enabled harus true atau false")
+    if v.anchor_mode not in ("pump_start", "impulse_low", "manual"):
+        errors.append("signal.vwap.anchor_mode harus 'pump_start', "
+                      "'impulse_low', atau 'manual'")
+    if v.no_anchor_action not in ("impulse_low", "block"):
+        errors.append("signal.vwap.no_anchor_action harus 'impulse_low' atau 'block'")
+    if v.on_insufficient_data not in ("block", "allow"):
+        errors.append("signal.vwap.on_insufficient_data harus 'block' "
+                      "atau 'allow'")
+    if v.anchor_lookback_candles < 5:
+        errors.append("signal.vwap.anchor_lookback_candles minimal 5")
+    if v.anchor_lookback_candles + v.pump_baseline_candles > cfg.data.history_candles:
+        errors.append(
+            "signal.vwap.anchor_lookback_candles + pump_baseline_candles tidak boleh "
+            "melebihi data.history_candles (buffer tidak cukup untuk mencari anchor)")
+    if v.pump_volume_mult <= 1:
+        errors.append("signal.vwap.pump_volume_mult harus > 1")
+    if v.pump_baseline_candles < 2:
+        errors.append("signal.vwap.pump_baseline_candles minimal 2")
+    if v.pump_max_gap_candles < 0:
+        errors.append("signal.vwap.pump_max_gap_candles tidak boleh negatif")
+    if v.min_anchor_candles < 1:
+        errors.append("signal.vwap.min_anchor_candles minimal 1")
+    if not v.min_above_pct < v.max_above_pct:
+        errors.append("signal.vwap.min_above_pct harus lebih kecil dari max_above_pct")
+    if v.min_above_pct < -5:
+        errors.append("signal.vwap.min_above_pct minimal -5 persen")
+    if v.max_above_pct > 100:
+        errors.append("signal.vwap.max_above_pct maksimal 100 persen")
+    if not isinstance(v.manual_anchors, dict):
+        errors.append("signal.vwap.manual_anchors harus map {SIMBOL: epoch_ms}")
+    else:
+        for k, val in v.manual_anchors.items():
+            if not isinstance(k, str):
+                errors.append("signal.vwap.manual_anchors: kunci harus nama "
+                              "simbol (string)")
+            if isinstance(val, bool) or not isinstance(val, int) or val <= 0:
+                errors.append(
+                    f"signal.vwap.manual_anchors['{k}'] harus epoch "
+                    "milidetik bulat positif")
 
     # --- risk (paling kritis!) ---
     r = cfg.risk

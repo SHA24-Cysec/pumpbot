@@ -32,6 +32,7 @@ from bot.signal_engine.detectors import (
     PriceActionDetector,
     VolumeDetector,
 )
+from bot.signal_engine.vwap import VWAPFilter
 from bot.utils import clamp
 
 # Detector yang tersedia dengan data candle saja.
@@ -197,6 +198,12 @@ def _buffer_cap(cfg: Config) -> int:
         int(getattr(cfg.signal.manipulation, "pump_dump_window_min", 15) or 15),
         15,
     )
+    # Filter VWAP membaca window anchor + baseline lonjakan; tanpa ini buffer
+    # terpotong dan hasil backtest berbeda dari live.
+    vcfg = getattr(cfg.signal, "vwap", None)
+    if vcfg is not None and getattr(vcfg, "enabled", False):
+        need = max(need, int(vcfg.anchor_lookback_candles)
+                   + int(vcfg.pump_baseline_candles))
     return need * 2 + 16
 
 
@@ -223,6 +230,8 @@ def scan_symbol(symbol: str, candles: list[Candle], cfg: Config,
     pa_det = PriceActionDetector()
     vol_det = VolumeDetector()
     manip_det = ManipulationDetector()
+    # Satu instance per pemanggilan supaya cache tidak bocor antar varian config.
+    vwap_filter = VWAPFilter() if cfg.signal.vwap.enabled else None
 
     buf = SymbolBuffer(symbol, max_candles=_buffer_cap(cfg))
     rolling = RollingTicker(symbol, candles, interval_min)
@@ -258,6 +267,12 @@ def scan_symbol(symbol: str, candles: list[Candle], cfg: Config,
         # Pembulatan disamakan dengan SignalEngine.evaluate.
         final = round(final, 1)
         if final < threshold:
+            continue
+
+        # Gate Anchored VWAP: setelah veto dan threshold, sebelum entry dibuat.
+        # buf.last_price sudah = close candle i (di-set on_candle), jadi
+        # keputusan memakai harga yang sama seperti jalur live.
+        if vwap_filter is not None and not vwap_filter.score(buf, cfg).eligible:
             continue
 
         nxt = candles[i + 1]

@@ -185,3 +185,74 @@ ulang di dalam simulate_portfolio untuk SETIAP simulasi.
 - Terukur pada 299.900 entry: 0.08 -> 0.02 detik per simulasi (sekitar 4x),
   jumlah trade identik. Diuji oleh test_presorted_hasil_identik_dengan_
   sort_biasa.
+
+
+## Filter Anchored VWAP sebagai gate entry (per 2026-09-21)
+
+Anchored VWAP ditambahkan sebagai FILTER entry, bukan sumber skor. Bobot,
+skor 0-100, threshold, veto manipulasi, dan seluruh logika exit (SL, TP, BE,
+trailing) tidak disentuh. Saat `signal.vwap.enabled: false`, perilaku bot
+identik dengan sebelum perubahan (dibuktikan oleh
+`test_engine_filter_off_snapshot_identik_dengan_sebelumnya` dan
+`test_backtest_scan_off_identik_dan_on_subset`).
+
+File baru:
+- `bot/signal_engine/vwap.py`: fungsi murni `anchored_vwap()`, `find_anchor()`,
+  `sanitize_candles()`, kelas `VWAPFilter` (kontrak detector, `name="vwap"`),
+  dan `FILTER_DETECTORS`. Sengaja TIDAK masuk `ALL_DETECTORS`.
+- `tests/test_vwap.py`: 34 tes: rumus (quote volume dan fallback typical
+  price), anchor pump_start / impulse_low / manual, keputusan di batas
+  inklusif, edge case (volume 0, NaN, duplikat, candle belum close),
+  tanpa look-ahead, cache, integrasi engine dan backtest, validasi config,
+  serta skenario 1m (pump 55 dan 65 candle lalu).
+
+File diubah:
+- `bot/config.py`: dataclass `VWAPCfg` (default `enabled=False`), field
+  `SignalCfg.vwap`, entri `("signal", "vwap")` di `_NESTED`, dan 14 aturan
+  validasi berbahasa Indonesia.
+- `config/config.yaml`: blok baru `signal.vwap` (satu satunya penambahan).
+- `bot/signal_engine/engine.py`: `self._filters`, `vwap_enabled_override`,
+  helper `_vwap_enabled()`, gate di `evaluate()`, `snapshot["vwap"]`,
+  alasan gate memuat "vwap", `Signal.breakdown["vwap"]`, jarak VWAP di log.
+  `snapshot["breakdown"]` sengaja TIDAK berubah.
+- `bot/dashboard/static/index.html`: flag `VWAP` memakai `.flag.gate` yang
+  sudah ada plus jarak VWAP di atribut `title`. Aman bila `s.vwap` tidak ada.
+  `bot/dashboard/server.py` tidak perlu diubah (hanya meneruskan snapshot).
+- `tools/backtest/signals.py`: gate VWAP setelah veto dan threshold,
+  `_buffer_cap()` diperluas `anchor_lookback_candles + pump_baseline_candles`,
+  satu `VWAPFilter` per pemanggilan `scan_symbol` agar cache tidak bocor.
+- `tools/backtest/optimize.py`: flag `--vwap {config,on,off}` dan status
+  filter dicetak di header hasil.
+- `README.md`, `tools/backtest/README.md`: dokumentasi rumus, parameter,
+  perbedaan window `impulse_low` (60) vs `price_action.structure_candles` (30),
+  dan catatan kalibrasi 5m.
+
+Bug yang ditemukan saat audit sendiri:
+- Batas `max_above_pct` inklusif gagal untuk nilai tepat batas karena galat
+  float (`1.08 / 1.0 - 1 = 8.000000000000007`). Diperbaiki dengan toleransi
+  `1e-9` di kedua sisi perbandingan.
+- `list(buf.candles)` dibayar pada tiap panggilan meski cache hit. Diperbaiki:
+  kunci cache dibangun dari `len()` dan `candles[-1]` (O(1) pada deque),
+  penyalinan hanya terjadi saat cache miss.
+- Biaya per panggilan tumbuh dengan panjang buffer (720 candle). Diperbaiki
+  dengan `needed_candles()` yang mengiris hanya window yang relevan
+  (`anchor_lookback + pump_baseline`); hasilnya identik, diuji lewat
+  `test_backtest_buffer_cap_cukup_untuk_vwap`.
+
+Kinerja satu putaran `evaluate()` untuk 100 simbol x 720 candle (median 5 run):
+0.0138 s sebelum, 0.0149 s sesudah dengan filter aktif (+8 persen, di bawah
+batas 10 persen). Filter sendiri hanya 0.54 ms per putaran.
+
+Baseline pytest sebelum perubahan: 214 lulus, 2 gagal
+(`tests/test_config.py::test_single_yaml_is_valid_and_loads` dan
+`tests/test_db_path_separation.py::TestSingleConfigIntegration::
+test_config_satu_satunya_memulai_live_dengan_db_terpisah`, keduanya karena
+config.yaml berisi mode testnet sedangkan tes mengharapkan live).
+Toggle live (opsional, tahap 7): `vwap_filter_enabled` ditambahkan ke
+`RuntimeParams` (bool_keys dan to_dict) di `bot/risk_management/manager.py`,
+`ParamsBody` di `bot/dashboard/server.py`, `BotApp.apply_runtime_flags` di
+`bot/main.py` (mengisi `engine.vwap_enabled_override`), dan satu checkbox di
+dashboard, mengikuti pola `trailing_enabled`.
+
+Sesudah perubahan: 248 lulus, 2 gagal (dua kegagalan LAMA yang sama, tidak ada
+kegagalan baru).

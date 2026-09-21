@@ -178,6 +178,37 @@ Konsekuensinya: **skala skor di sini berbeda dari skor live** yang memakai lima
 detector. Threshold wajib dikalibrasi ulang, jangan langsung memakai angka 70
 dari config.
 
+## 4b. Filter Anchored VWAP di backtest
+
+`scan_symbol` memanggil `VWAPFilter` tepat setelah pengecekan veto dan
+threshold, sebelum `Entry` dibuat, bila `signal.vwap.enabled` bernilai true.
+Candle yang ditolak filter dilewati; logika prune tidak berubah, dan
+`_buffer_cap()` otomatis diperluas sebesar
+`anchor_lookback_candles + pump_baseline_candles` supaya buffer backtest tidak
+lebih pendek daripada jalur live.
+
+Flag optimizer:
+
+```bash
+python -m tools.backtest.optimize --vwap off   # filter dimatikan
+python -m tools.backtest.optimize --vwap on    # filter dipaksa aktif
+python -m tools.backtest.optimize --vwap config  # default, ikut config.yaml
+```
+
+Status filter dicetak di header hasil.
+
+**Interval.** Default `--interval` backtest adalah `1m`, sama dengan default
+live, jadi `anchor_lookback_candles: 60` mewakili rentang waktu yang sama
+(60 menit). Tools download hanya mendukung `1m` dan `5m`. Bila backtest
+dijalankan dengan `--interval 5m`, semua parameter VWAP (yang satuannya CANDLE)
+harus disesuaikan: `anchor_lookback_candles: 60` pada 5m berarti 5 jam, bukan
+1 jam. Perkecil nilainya (mis. 12 candle = 1 jam) agar setara.
+
+**Kalibrasi.** Karena skor di sini proksi candle only (hanya price_action dan
+volume), pasangan `score_threshold` dan `vwap.max_above_pct` yang optimal di
+backtest tidak otomatis optimal di live. Kalibrasi ulang keduanya, dan bandingkan
+selalu run `--vwap off` dengan `--vwap on` pada data yang sama.
+
 ## Diagnostik edge sinyal (tanpa exit)
 
 Pertanyaan paling mendasar sebelum optimasi apa pun: "setelah sinyal bunyi,

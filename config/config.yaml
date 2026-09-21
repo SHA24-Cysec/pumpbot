@@ -9,7 +9,7 @@
 # Mode operasi bot:
 #   testnet -> Binance Spot Testnet (data & order palsu)
 #   live    -> uang sungguhan (hanya setelah testnet stabil)
-mode: testnet
+mode: live
 
 # Mata uang quote yang dipakai trading (semua pair berakhiran USDT)
 quote_asset: USDT
@@ -20,7 +20,7 @@ quote_asset: USDT
 universe:
   # Jumlah koin maksimum yang dipantau sekaligus (batasi beban WebSocket & API).
   # Diambil dari koin dengan volume 24 jam tertinggi yang lolos filter.
-  max_symbols: 100
+  max_symbols: 50
 
   # Volume quote 24 jam minimum (dalam satuan quote, 5_000_000 = 5 juta USDT)
   # supaya tidak memantau koin yang terlalu sepi / mudah dimanipulasi.
@@ -49,7 +49,7 @@ universe:
 # ----------------------------------------------------------------------------
 data:
   # Interval candle untuk analisis sinyal.
-  kline_interval: 5m
+  kline_interval: 1m
 
   # Jumlah candle historis yang diambil via REST saat start
   # (untuk baseline rata-rata volume/trade sebelum WebSocket aktif).
@@ -94,9 +94,9 @@ signal:
   weights:
     orderbook: 0.20       # ketimpangan bid/ask + deteksi wall
     trade_flow: 0.15      # lonjakan frekuensi trade + tekanan beli
-    volume: 0.20          # lonjakan volume vs moving average
+    volume: 0.30          # lonjakan volume vs moving average
     whale: 0.15           # transaksi bandar + deteksi spoofing
-    price_action: 0.30    # struktur tren, breakout, fibonacci (SINYAL UTAMA)
+    price_action: 0.70    # struktur tren, breakout, fibonacci (SINYAL UTAMA)
 
   # ------------------- DETEKSI MANIPULASI (filter negatif) -------------------
   manipulation:
@@ -175,6 +175,53 @@ signal:
     # Posisi harga di range 30 candle; >= 0.9 berarti menempel puncak.
     near_top_pct: 0.9
 
+  # ------------------- FILTER ANCHORED VWAP (GATE ENTRY) -------------------
+  # VWAP berlabuh dari awal pump. BUKAN sumber skor: hanya boleh MEMBATALKAN
+  # entry yang sudah lolos skor, veto, dan threshold. Semua parameter dihitung
+  # dalam JUMLAH CANDLE, jadi pada kline_interval 1m satu candle = satu menit.
+  vwap:
+    # false -> perilaku bot persis seperti sebelum filter ini ada.
+    enabled: true
+
+    # Cara memilih candle anchor:
+    #   pump_start  -> awal rantai lonjakan volume terbaru (disarankan)
+    #   impulse_low -> candle dengan low terendah dalam window
+    #   manual      -> dari manual_anchors di bawah
+    anchor_mode: pump_start
+
+    # Window pencarian anchor (60 candle = 60 menit pada 1m), cukup untuk
+    # mencakup satu pump penuh.
+    anchor_lookback_candles: 60
+
+    # Candle dianggap "berlonjak" bila volumenya >= 3x rata-rata 20 candle
+    # sebelumnya DAN candle-nya bullish (close > open).
+    pump_volume_mult: 3.0
+    pump_baseline_candles: 20
+
+    # Dua lonjakan dianggap satu rantai bila jaraknya <= 3 candle.
+    pump_max_gap_candles: 3
+
+    # Bila tidak ada lonjakan di window: impulse_low atau block.
+    no_anchor_action: impulse_low
+
+    # Anchor manual per simbol, epoch milidetik UTC. Contoh:
+    #   manual_anchors: {PEPEUSDT: 1758326400000}
+    manual_anchors: {}
+
+    # Zona entry yang diterima, jarak harga terhadap VWAP dalam persen
+    # (batas inklusif). Di bawah min = penjual menguasai sejak pump,
+    # di atas max = mengejar puncak.
+    min_above_pct: 0.0
+    max_above_pct: 8.0        # nilai awal, WAJIB dikalibrasi lewat backtest
+
+    # Minimal candle sejak anchor sebelum VWAP dipercaya.
+    min_anchor_candles: 3
+
+    # Data kurang (candle sedikit, volume 0, harga tidak valid):
+    #   block -> tolak entry (default, konsisten dengan detector lain)
+    #   allow -> biarkan lewat
+    on_insufficient_data: block
+
 # ----------------------------------------------------------------------------
 # RISK MANAGEMENT - manajemen risiko (BACA SEBELUM UBAH!)
 # ----------------------------------------------------------------------------
@@ -201,7 +248,7 @@ stops:
   # Default SL tetap 1% di bawah entry. Mode structure tetap tersedia bila
   # diperlukan, tetapi contoh strategi 1:2 menggunakan mode percent.
   mode: percent
-  percent_pct: 1.0
+  percent_pct: 3.0
   structure_buffer_pct: 0.15
   min_stop_pct: 0.5
   max_stop_pct: 4.0
@@ -209,18 +256,18 @@ stops:
 take_profit:
   # Satu TP berbasis risk:reward. rr 2 + SL 1% = TP 2% (1:2).
   mode: rr
-  rr: 2.0
+  rr: 4.0
 
 breakeven:
   enabled: true
   # BE saat +1R, yaitu entry + 1 x jarak SL awal. Dengan TP 2R, BE aktif
   # sebelum TP apa pun jarak SL yang digunakan.
-  trigger_rr: 1.0
+  trigger_rr: 0.5
   # Buffer minimal 2x fee tetap dipakai agar BE tidak rugi karena biaya.
-  buffer_pct: 0.25
+  buffer_pct: 0.3
 
 trailing:
-  enabled: true
+  enabled: false
   # Aktif otomatis segera setelah BE; SL mengikuti harga tertinggi - 0,5%.
   mode: percent
   percent_pct: 0.5

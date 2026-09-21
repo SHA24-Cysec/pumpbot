@@ -412,13 +412,15 @@ def _fmt_cd(value: Optional[float]) -> str:
 
 
 def print_table(rows: list[dict], oos_map: Optional[dict] = None,
-                top: int = 10) -> None:
+                top: int = 10, vwap_enabled: Optional[bool] = None) -> None:
     """Cetak tabel top K kombinasi beserta metrik in sample dan out of sample.
 
     Kolom sinyal: THR = threshold, WPA = rasio bobot price action,
     MA = volume.ma_period, SPK = volume.spike_scale, STR/BRK = lookback
     price action, CD = cooldown menit. Rincian lengkap ada di CSV.
     """
+    if vwap_enabled is not None:
+        print(f"Filter Anchored VWAP: {'AKTIF' if vwap_enabled else 'MATI'}")
     header = (f"{'#':>2} {'THR':>4} {'WPA':>4} {'MA':>3} {'SPK':>4} "
               f"{'STR':>3} {'BRK':>3} {'CD':>4} "
               f"{'SL%':>5} {'TP':>4} {'BE':>4} {'BUF':>4} {'TR%':>4} "
@@ -589,6 +591,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--be", default="", help="daftar be_rr dipisah koma")
     p.add_argument("--be-buffer", default="", help="daftar be_buffer_pct")
     p.add_argument("--trail", default="", help="daftar trail_pct")
+    p.add_argument("--vwap", choices=("config", "on", "off"), default="config",
+                   help="filter Anchored VWAP: ikut config (default), paksa on, "
+                        "atau paksa off")
     p.add_argument("--config", default=os.path.join("config", "config.yaml"))
     p.add_argument("--data-dir", default=DATA_DIR)
     p.add_argument("--results", default=RESULTS_CSV)
@@ -601,6 +606,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     """Titik masuk CLI optimizer."""
     args = build_parser().parse_args(argv)
     cfg = load_backtest_config(args.config)
+
+    # Override filter Anchored VWAP sebelum variant_cfg menyalin config.
+    if args.vwap == "on":
+        cfg.signal.vwap.enabled = True
+    elif args.vwap == "off":
+        cfg.signal.vwap.enabled = False
+    vwap_status = ("AKTIF" if cfg.signal.vwap.enabled else "MATI")
+    print(f"Filter Anchored VWAP: {vwap_status} (--vwap {args.vwap})")
 
     # Bangun kedua grid sebelum area progres supaya peringatannya tampil biasa.
     if args.thr.strip():
@@ -754,7 +767,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             bar.close()
 
     print()
-    print_table(rows, oos_map if oos_map else None, args.top)
+    print_table(rows, oos_map if oos_map else None, args.top,
+                vwap_enabled=cfg.signal.vwap.enabled)
 
     path = write_results_csv(rows, args.results, oos_map)
     print(f"\nCSV lengkap: {path}")

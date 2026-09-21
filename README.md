@@ -67,6 +67,13 @@ tidak dipakai di sini.
         │  orderbook • trade_flow • volume • whale • manipulasi   │
         │  (penalti/veto) • price_action (breakout+fib)           │
         └───────────────────────────┬───────────────────────────┘
+                                    │
+        ┌───────────────────────────▼───────────────────────────┐
+        │  FILTER ANCHORED VWAP (gate, opsional)                  │
+        │  • VWAP dari awal pump sampai candle closed terakhir    │
+        │  • entry hanya bila jarak harga ke VWAP di zona sehat   │
+        │  • tidak menyumbang skor, hanya boleh membatalkan       │
+        └───────────────────────────┬───────────────────────────┘
                     skor ≥ threshold & lolos filter
                                     │
         ┌───────────────────────────▼───────────────────────────┐
@@ -120,6 +127,7 @@ pumpbot/
 │   │   └── collector.py        # watchlist + langganan stream + seed REST
 │   ├── signal_engine/
 │   │   ├── detectors.py        # 6 detector pump
+│   │   ├── vwap.py             # filter Anchored VWAP (gate entry, PURE)
 │   │   └── engine.py           # penggabung skor, threshold, cooldown
 │   ├── risk_management/
 │   │   ├── sizing.py           # position sizing (PURE, unit-test)
@@ -138,6 +146,7 @@ pumpbot/
 │   ├── test_stops.py           # verifikasi SL/TP/breakeven/trailing
 │   ├── test_stats.py           # verifikasi statistik performa
 │   ├── test_detectors.py       # verifikasi logika deteksi
+│   ├── test_vwap.py            # verifikasi filter Anchored VWAP
 │   ├── test_config.py          # verifikasi validasi konfigurasi
 │   ├── test_executor_race.py   # regresi race re-place OCO vs tutup manual
 │   └── test_executor_sl.py     # jalur stop-loss end-to-end (paper)
@@ -253,7 +262,55 @@ Endpoint REST: `GET /api/health`, `GET /api/trades`, `GET|POST /api/params`,
 
 **Skor akhir** = rata-rata tertimbang detector positif × (1 − bobot_manipulasi ×
 skor_manipulasi). Entry bila skor ≥ `score_threshold` (default 70) DAN lolos
-gate spread DAN tidak di-veto DAN simbol tidak sedang cooldown.
+gate spread DAN tidak di-veto DAN simbol tidak sedang cooldown DAN (bila aktif)
+lolos filter Anchored VWAP di bawah.
+
+### Filter Anchored VWAP (gate entry, bukan skor)
+
+VWAP berlabuh dihitung dari satu candle ANCHOR sampai candle closed terakhir:
+
+    VWAP = Σ nilai_transaksi / Σ volume
+
+Nilai per candle memakai `quote_volume` bila > 0 (elemen indeks 7 pada respons
+kline Binance Spot = Quote asset volume), selain itu jatuh ke typical price
+`((high + low + close) / 3) × volume`. Hanya candle CLOSED dengan volume > 0
+yang dijumlahkan; duplikat dan `open_time` yang tidak naik (akibat reconnect
+WebSocket) dibuang. Karena buffer hanya berisi candle closed, tidak ada
+look-ahead.
+
+Keputusan: `dist_pct = (last_price − vwap) / vwap × 100`, lolos bila
+`min_above_pct ≤ dist_pct ≤ max_above_pct` (inklusif). Harga di bawah VWAP
+berarti penjual menguasai pasar sejak pump dimulai; harga terlalu jauh di atas
+berarti kita mengejar puncak. Keduanya ditolak.
+
+| Parameter (`signal.vwap`) | Default | Arti |
+|---|---|---|
+| `enabled` | `true` di YAML, `false` di dataclass | matikan untuk perilaku persis seperti sebelum filter ada |
+| `anchor_mode` | `pump_start` | `pump_start` / `impulse_low` / `manual` |
+| `anchor_lookback_candles` | 60 | window pencarian anchor (60 candle = 60 menit pada 1m) |
+| `pump_volume_mult` | 3.0 | candle "berlonjak" bila volume ≥ 3× rata-rata baseline dan bullish |
+| `pump_baseline_candles` | 20 | panjang baseline rata-rata volume sebelum candle kandidat |
+| `pump_max_gap_candles` | 3 | dua lonjakan masuk satu rantai bila jaraknya ≤ 3 candle |
+| `no_anchor_action` | `impulse_low` | bila tidak ada lonjakan: pakai low terendah, atau `block` |
+| `manual_anchors` | `{}` | `{SIMBOL: epoch_ms UTC}`; simbol tak terdaftar / di luar window ikut `no_anchor_action` |
+| `min_above_pct` | 0.0 | batas bawah zona entry (persen terhadap VWAP) |
+| `max_above_pct` | 8.0 | batas atas zona entry, **nilai awal, wajib dikalibrasi lewat backtest** |
+| `min_anchor_candles` | 3 | minimal candle sejak anchor sebelum VWAP dipercaya |
+| `on_insufficient_data` | `block` | data kurang / volume 0 / harga tidak valid: `block` atau `allow` |
+
+Semua parameter berjumlah CANDLE, jadi pada `data.kline_interval: 1m` satu
+candle sama dengan satu menit.
+
+**Anchor `pump_start`:** dalam window, cari candle berlonjak TERBARU lalu
+telusuri mundur selama jarak antar lonjakan ≤ `pump_max_gap_candles`; anchor =
+candle paling awal dalam rantai itu. Lonjakan lama yang terpisah diabaikan.
+
+**Anchor `impulse_low` vs fibonacci PriceActionDetector:** keduanya memakai
+konsep kaki impulsif (low terendah lalu diukur ke atas), tetapi windownya
+BERBEDA. PriceActionDetector memakai `price_action.structure_candles` (30),
+sedangkan filter VWAP memakai `vwap.anchor_lookback_candles` (60) sendiri.
+Jadi anchor VWAP bisa berada lebih jauh ke belakang daripada kaki impulsif
+yang dipakai skor fibonacci; ini disengaja supaya satu pump penuh tercakup.
 
 ### Kenapa menunggu retracement / breakout, bukan mengejar kenaikan?
 
@@ -340,11 +397,14 @@ Urutan ringkas untuk entry 100, SL 99 dan TP 102:
 python -m pytest tests/ -v
 ```
 
-113 unit test mencakup: position sizing (risiko tidak pernah melebihi target),
+248 unit test lulus pada perintah baseline (`python -m pytest -q
+--ignore=tests/test_backtest_parity.py --ignore=tests/test_engine_max_hold.py
+--ignore=tests/test_grid_cache.py`), mencakup: position sizing (risiko tidak pernah melebihi target),
 pembulatan LOT_SIZE/MIN_NOTIONAL, SL awal struktur/persen, level TP,
 trigger & harga breakeven, trailing monoton, ATR, statistik (win rate, profit
 factor, max drawdown), seluruh detector (skor/gate/veto), validasi
-konfigurasi, plus dua test end-to-end executor:
+konfigurasi, filter Anchored VWAP (rumus, anchor, gate, cache, integrasi
+engine dan backtest), plus dua test end-to-end executor:
 race-condition "re-place OCO vs tutup posisi manual" (anti OCO yatim/penjualan
 ganda) dan jalur exit stop-loss beserta konsistensi akuntansi dana.
 

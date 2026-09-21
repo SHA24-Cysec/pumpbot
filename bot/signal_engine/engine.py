@@ -22,6 +22,7 @@ from bot.config import Config
 from bot.data_collector.collector import DataCollector
 from bot.models import Signal
 from bot.signal_engine.detectors import ALL_DETECTORS
+from bot.signal_engine.vwap import FILTER_DETECTORS
 from bot.utils import clamp, now_ms
 
 logger = logging.getLogger("pumpbot.signal")
@@ -38,12 +39,23 @@ class SignalEngine:
         self.latest: dict[str, dict] = {}
         self.paused = False                     # diatur dari dashboard
         self._detectors = {name: cls() for name, cls in ALL_DETECTORS.items()}
+        # Filter gate (tidak menyumbang skor), mis. Anchored VWAP.
+        self._filters = {name: cls() for name, cls in FILTER_DETECTORS.items()}
+        # Override runtime dari dashboard: None = ikut config.
+        self.vwap_enabled_override: Optional[bool] = None
         # provider waktu aktivitas terakhir per simbol (untuk cooldown),
         # di-inject dari main (membaca database)
         self.cooldown_provider: Callable[[str], float] = lambda sym: 1e9
         self._task: Optional[asyncio.Task] = None
         self.on_signal: Optional[OnSignal] = None
         self.evaluated = 0
+
+    # ------------------------------------------------------------------
+    def _vwap_enabled(self) -> bool:
+        """Filter VWAP aktif? Override runtime menang atas config."""
+        if self.vwap_enabled_override is not None:
+            return bool(self.vwap_enabled_override)
+        return bool(self.cfg.signal.vwap.enabled)
 
     # ------------------------------------------------------------------
     def evaluate(self, symbol: str) -> Optional[dict]:
@@ -76,6 +88,16 @@ class SignalEngine:
                       0.0, 100.0)
 
         eligible = all(results[n].eligible for n in pos_names)
+
+        # --- filter Anchored VWAP (gate, bukan skor) ---
+        vwap_ok = True
+        vwap_info = None
+        if self._vwap_enabled():
+            vres = self._filters["vwap"].score(buf, cfg)
+            vwap_info = dict(vres.details)
+            vwap_ok = bool(vres.eligible)
+            eligible = eligible and vwap_ok
+
         veto = manip.veto
         snapshot = {
             "symbol": symbol,
@@ -88,6 +110,8 @@ class SignalEngine:
             "breakdown": {n: round(results[n].score, 1) for n in results},
             "manip_details": manip.details,
         }
+        if vwap_info is not None:
+            snapshot["vwap"] = vwap_info
         self.latest[symbol] = snapshot
         self.evaluated += 1
 
@@ -95,7 +119,12 @@ class SignalEngine:
             snapshot["reason"] = f"VETO manipulasi (skor {manip.score:.0f})"
         elif not eligible:
             bad = [n for n in pos_names if not results[n].eligible]
-            snapshot["reason"] = f"gate: {','.join(bad)}"
+            if not vwap_ok:
+                bad.append("vwap")
+            reason = f"gate: {','.join(bad)}"
+            if not vwap_ok and vwap_info:
+                reason += f" ({vwap_info.get('reason', '')})"
+            snapshot["reason"] = reason
         return snapshot
 
     # ------------------------------------------------------------------
@@ -146,6 +175,7 @@ class SignalEngine:
                         breakdown={
                             "scores": snapshot["breakdown"],
                             "manip": snapshot["manip_details"],
+                            "vwap": snapshot.get("vwap"),
                         },
                         suggested_stop=self._structure_stop(symbol),
                         entry_type="breakout",
@@ -154,9 +184,11 @@ class SignalEngine:
                             f"detail={snapshot['breakdown']}"
                         ),
                     )
+                    vw = snapshot.get("vwap")
+                    vwap_txt = (f" vwap_dist={vw.get('dist_pct')}%" if vw else "")
                     logger.info(
                         f"SINYAL {symbol} @ {sig.price:.6f} skor={sig.score:.0f} "
-                        f"breakdown={snapshot['breakdown']}"
+                        f"breakdown={snapshot['breakdown']}{vwap_txt}"
                     )
                     try:
                         await self.on_signal(sig)

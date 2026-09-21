@@ -451,15 +451,23 @@ function renderSignals(){
   el.innerHTML = S.signals.map(s => {
     const flag = s.veto ? "<span class='flag veto'>VETO</span>" :
                  (s.eligible ? "" : "<span class='flag gate'>GATE</span>");
+    // Filter Anchored VWAP: hanya tampil kalau datanya ada (sinyal lama tidak punya).
+    const vw = s.vwap || null;
+    const vwapFlag = (vw && vw.passed === false) ? "<span class='flag gate'>VWAP</span>" : "";
     const bd = s.breakdown || {};
-    const title = Object.entries(bd).map(([k,v])=>k+": "+v).join("  |  ");
+    let title = Object.entries(bd).map(([k,v])=>k+": "+v).join("  |  ");
+    if(vw){
+      title += "  |  vwap: " + (Number(vw.vwap)||0).toPrecision(6) +
+               " (jarak " + (Number(vw.dist_pct)||0).toFixed(2) + "%" +
+               (vw.reason ? ", " + vw.reason : "") + ")";
+    }
     return "<div class='sigrow' title='"+title+"'>"+
       "<span class='sym'>"+s.symbol+"</span>"+
       "<span class='pr'>"+Number(s.price).toPrecision(6)+"</span>"+
       "<div class='scorebar'><div style='width:"+Math.min(100,s.score)+"%;"+
         "background:"+scoreColor(s.score)+"'></div></div>"+
       "<span class='sc' style='color:"+scoreColor(s.score)+"'>"+Math.round(s.score)+"</span>"+
-      flag+"</div>";
+      flag+vwapFlag+"</div>";
   }).join("");
   // rincian detector simbol teratas
   const top = S.signals[0];
@@ -531,6 +539,7 @@ const PARAM_FIELDS = [
   ["score_threshold","Skor minimum sinyal","number","step=1"],
   ["trailing_enabled","Trailing stop aktif","checkbox",""],
   ["breakeven_enabled","Breakeven aktif","checkbox",""],
+  ["vwap_filter_enabled","Filter Anchored VWAP aktif","checkbox",""],
 ];
 
 function renderParams(){
