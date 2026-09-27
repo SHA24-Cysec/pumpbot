@@ -9,7 +9,7 @@
 # Mode operasi bot:
 #   testnet -> Binance Spot Testnet (data & order palsu)
 #   live    -> uang sungguhan (hanya setelah testnet stabil)
-mode: live
+mode: testnet
 
 # Mata uang quote yang dipakai trading (semua pair berakhiran USDT)
 quote_asset: USDT
