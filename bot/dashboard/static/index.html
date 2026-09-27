@@ -1178,6 +1178,22 @@ function btPollOff(){
   if(BT.timer){ clearInterval(BT.timer); BT.timer = null; }
 }
 
+/* Ubah durasi detik menjadi teks yang nyaman dibaca, misalnya
+   "26 menit 36 detik" atau "1 jam 2 menit 5 detik". */
+function btFormatDuration(seconds){
+  let total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hari = Math.floor(total / 86400); total %= 86400;
+  const jam = Math.floor(total / 3600); total %= 3600;
+  const menit = Math.floor(total / 60);
+  const detik = total % 60;
+  const bagian = [];
+  if(hari) bagian.push(hari + " hari");
+  if(jam || hari) bagian.push(jam + " jam");
+  if(menit || jam || hari) bagian.push(menit + " menit");
+  bagian.push(detik + " detik");
+  return bagian.join(" ");
+}
+
 async function btPoll(){
   const r = await api("/api/backtest/state?since=" + BT.logSeq);
   if(!r) return;
@@ -1190,8 +1206,9 @@ async function btPoll(){
 
   const teks = {idle:"belum pernah dijalankan", running:"sedang berjalan",
     done:"selesai", error:"gagal", cancelled:"dibatalkan"}[r.status] || r.status;
+  const durasi = btFormatDuration(r.elapsed_sec);
   $("btStatus").textContent = teks +
-    (r.elapsed_sec ? " · " + r.elapsed_sec + " detik" : "");
+    (r.elapsed_sec ? " · " + durasi : "");
 
   if(r.status !== "idle"){
     $("btProg").style.display = "";
@@ -1201,7 +1218,9 @@ async function btPoll(){
       (r.status === "done" ? " done" : (r.status === "error" ? " err" : ""));
     const det = r.progress?.detail ? " · " + esc(r.progress.detail) : "";
     $("btPhase").innerHTML = esc(r.phase?.label || "-") + " " + pct.toFixed(1) + "%" + det;
-    $("btElapsed").textContent = (r.elapsed_sec || 0) + " detik berjalan";
+    const awalanDurasi = r.status === "running" ? "Berjalan "
+      : (r.status === "done" ? "Selesai dalam " : "Durasi ");
+    $("btElapsed").textContent = awalanDurasi + durasi;
   }
 
   if(r.logs && r.logs.length){
@@ -1241,8 +1260,8 @@ function btRenderRows(state){
   const m = state.meta || {};
   $("btResMeta").textContent = m.n_symbols
     ? "(" + m.n_symbols + " simbol, " + Number(m.n_candles||0).toLocaleString("id-ID") +
-      " candle " + m.interval + ", " + m.total_rows + " kombinasi diuji, " +
-      m.elapsed_sec + " detik)"
+      " candle " + m.interval + ", " + m.total_rows + " kombinasi diuji, durasi " +
+      btFormatDuration(m.elapsed_sec) + ")"
     : "";
 
   tb.innerHTML = BT.rows.map(r => {
