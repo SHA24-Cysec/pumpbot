@@ -6,7 +6,7 @@ Skenario yang diverifikasi:
     min/max jarak.
   * Level TP tunggal (RR), multi target (partial), dan single.
   * Trigger breakeven di TP pertama / gain manual + buffer fee.
-  * Trailing stop percent & ATR, sifat monoton (SL tidak pernah turun).
+  * Trailing stop persen, sifat monoton (SL tidak pernah turun).
 """
 
 import os
@@ -15,9 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bot.config import TPTarget
-from bot.models import Candle
 from bot.risk_management.stops import (
-    atr,
     breakeven_price,
     breakeven_trigger_price,
     initial_stop,
@@ -122,27 +120,21 @@ def test_breakeven_trigger_scales_with_stop_distance():
 # ---------------------------------------------------------------------------
 
 def test_trailing_percent():
-    s = trailing_stop_price(highest=1.10, mode="percent", percent_pct=1.2,
-                            atr_value=0.0, atr_multiplier=2.5)
+    s = trailing_stop_price(highest=1.10, percent_pct=1.2)
     assert abs(s - 1.10 * 0.988) < 1e-9
 
 
-def test_trailing_atr():
-    s = trailing_stop_price(highest=1.10, mode="atr", percent_pct=1.2,
-                            atr_value=0.004, atr_multiplier=2.5)
-    assert abs(s - (1.10 - 0.01)) < 1e-9
+def test_trailing_highest_nol():
+    # highest tidak valid -> kandidat 0, tidak pernah menurunkan SL
+    assert trailing_stop_price(highest=0.0, percent_pct=1.2) == 0.0
 
 
 def test_trailing_never_decreases():
     # kandidat trailing 1.0868 < SL saat ini 1.09 -> SL tetap 1.09
-    s = update_trailing(current_sl=1.09, highest=1.10, entry=1.0,
-                        mode="percent", percent_pct=1.2, atr_value=0.0,
-                        atr_multiplier=2.5)
+    s = update_trailing(current_sl=1.09, highest=1.10, percent_pct=1.2)
     assert abs(s - 1.09) < 1e-9
     # kandidat lebih tinggi -> SL naik
-    s2 = update_trailing(current_sl=1.05, highest=1.10, entry=1.0,
-                         mode="percent", percent_pct=1.2, atr_value=0.0,
-                         atr_multiplier=2.5)
+    s2 = update_trailing(current_sl=1.05, highest=1.10, percent_pct=1.2)
     assert abs(s2 - 1.0868) < 1e-4
 
 
@@ -153,31 +145,3 @@ def test_should_update_exit_order_step():
     assert should_update_exit_order(1.050, 1.060, 0.15) is True
     # turun -> tidak pernah
     assert should_update_exit_order(1.060, 1.050, 0.15) is False
-
-
-# ---------------------------------------------------------------------------
-# ATR
-# ---------------------------------------------------------------------------
-
-def _candle(o, h, l, c):
-    return Candle(0, 0, o, h, l, c, 100, 100, 10, 50, True)
-
-
-def test_atr_constant_range():
-    # semua candle range 0.02 tanpa gap -> ATR = 0.02
-    candles = [_candle(1.0, 1.01, 0.99, 1.0) for _ in range(10)]
-    assert abs(atr(candles, 14) - 0.02) < 1e-9
-
-
-def test_atr_with_gap():
-    # candle terakhir gap naik: TR = max(0.02, |1.02-1.0|, |0.98-1.0|) = 0.02... 
-    # gunakan gap besar: close 1.0 -> high 1.05, low 1.03
-    candles = [_candle(1.0, 1.01, 0.99, 1.0) for _ in range(5)]
-    candles.append(_candle(1.0, 1.05, 1.03, 1.04))
-    # TR terakhir = max(0.02, |1.05-1.0|=0.05, |1.03-1.0|=0.03) = 0.05
-    val = atr(candles, 14)
-    assert 0.02 < val <= 0.05
-
-
-def test_atr_empty():
-    assert atr([], 14) == 0.0

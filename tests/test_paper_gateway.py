@@ -63,7 +63,8 @@ class _StubMarket:
     async def get_quote_idr_rate(self):
         return {"rate": 16_000.0, "symbol": "USDTIDR", "source": "stub"}
 
-    async def subscribe(self, symbols, on_candle, on_trade, on_book, on_ticker):
+    async def subscribe(self, symbols, on_candle, on_trade, on_book, on_ticker,
+                        kline_interval="1m"):
         self.subscribed = list(symbols)
         self.cbs = {"candle": on_candle, "trade": on_trade,
                     "book": on_book, "ticker": on_ticker}

@@ -340,10 +340,23 @@ class Executor:
                         reason=reason,
                         fee_quote=st["filled_quote"] * self.cfg.risk.fee_pct / 100)
                     if st.get("which") == "sl":
-                        # SL kena -> sibling OCO otomatis ter-cancel di exchange
+                        # SL kena -> posisi selesai. "Sibling" yang otomatis
+                        # ter-cancel hanyalah LEG KEDUA dalam OCO yang sama;
+                        # OCO chunk LAIN adalah order list TERPISAH di exchange
+                        # dan tetap hidup -> WAJIB dibatalkan eksplisit agar
+                        # tidak menjadi OCO yatim yang bisa terisi tanpa catatan.
                         for c in pos.chunks:
                             if c.status == "PENDING":
+                                if c.oco_list_id:
+                                    await self.gateway.cancel_oco(
+                                        pos.symbol, c.oco_list_id)
+                                    c.oco_list_id = None
                                 c.status = "CANCELED"
+                        # Finalisasi record: tanpa ini posisi menggantung
+                        # status OPEN tanpa OCO (memblokir entry baru simbol
+                        # tersebut dan membuat equity salah hitung).
+                        await self._finalize_if_done(
+                            pos, exit_price=st["avg_price"], reason=reason)
                         break
 
     async def place_exit_orders(self, pos: Position, force: bool = False) -> bool:
@@ -487,9 +500,15 @@ class Executor:
                         pos, qty=st["filled_qty"], price=st["avg_price"],
                         reason=reason, fee_quote=st["filled_quote"] * self.cfg.risk.fee_pct / 100)
                     if st.get("which") == "sl":
-                        # SL kena -> sisa chunk otomatis ter-cancel oleh OCO induk
+                        # SL kena -> OCO chunk lain (order list terpisah)
+                        # tetap hidup di exchange dan harus dibatalkan
+                        # eksplisit, bukan hanya ditandai CANCELED lokal.
                         for c in pos.chunks:
                             if c.status == "PENDING":
+                                if c.oco_list_id:
+                                    await self.gateway.cancel_oco(
+                                        pos.symbol, c.oco_list_id)
+                                    c.oco_list_id = None
                                 c.status = "CANCELED"
                         await self._finalize_if_done(pos, exit_price=st["avg_price"],
                                                      reason=reason)

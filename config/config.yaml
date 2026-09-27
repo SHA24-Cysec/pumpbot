@@ -258,7 +258,7 @@ risk:
   # Tidak ada batas atas software; angka berapa pun > 0 diterima.
   # Contoh: 1.0 = risk target 1% balance, 25.0 = 25% balance.
   # Di Spot, ukuran order tetap dibatasi saldo quote tersedia dan aturan exchange.
-  risk_per_trade_pct: 99.0
+  risk_per_trade_pct: 100.0
 
   # Default aman: satu posisi saja. Set true untuk mengizinkan hingga 3 pair.
   allow_multiple_positions: false
@@ -295,12 +295,10 @@ breakeven:
   buffer_pct: 0.3
 
 trailing:
+  # Aktif otomatis segera setelah BE; SL mengikuti harga tertinggi dengan
+  # jarak percent_pct. (Fitur ATR trailing sudah dihapus dari bot.)
   enabled: false
-  # Aktif otomatis segera setelah BE; SL mengikuti harga tertinggi - 0,5%.
-  mode: percent
   percent_pct: 0.5
-  atr_period: 14
-  atr_multiplier: 2.5
   update_step_pct: 0.15
 
 execution:

@@ -38,13 +38,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from bot.models import Candle
-
 from tools.backtest.download import (
     DATA_DIR,
     INTERVAL_MS,
     DownloadError,
-    csv_path,
     download_symbol,
     top_symbols,
 )
@@ -382,7 +379,6 @@ def apply_payload(p: Params, sp: SignalParams, cfg) -> dict:
     """
     be_on = p.be_rr > 0
     tr_on = p.trail_pct > 0
-    weights = dict(cfg.signal.weights)
     return {
         "exit": {
             "stops.mode": "percent",
@@ -395,7 +391,6 @@ def apply_payload(p: Params, sp: SignalParams, cfg) -> dict:
             "breakeven.buffer_pct": (p.be_buffer_pct if be_on
                                      else cfg.breakeven.buffer_pct),
             "trailing.enabled": tr_on,
-            "trailing.mode": "percent",
             "trailing.percent_pct": (p.trail_pct if tr_on
                                      else cfg.trailing.percent_pct),
             "trailing.update_step_pct": p.trail_step_pct,
@@ -726,8 +721,6 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
              "elapsed_sec": round(time.time() - t_mulai, 1),
              "not_optimized": [
                  f"stops.mode tetap {cfg.stops.mode} (hanya percent diuji)",
-                 f"trailing ATR (atr_period={cfg.trailing.atr_period}, "
-                 f"atr_multiplier={cfg.trailing.atr_multiplier})",
                  "take_profit multi target dan porsi jual parsial",
                  f"trailing.update_step_pct tetap "
                  f"{cfg.trailing.update_step_pct} dari config",

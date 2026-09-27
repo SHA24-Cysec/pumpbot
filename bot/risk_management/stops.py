@@ -6,14 +6,12 @@ Semua fungsi tanpa side-effect supaya perilakunya mudah diverifikasi:
   * initial_stop()      : SL awal dari struktur atau persen
   * take_profit_levels(): daftar level TP + porsi jual per level
   * breakeven_*()       : kapan & ke mana SL dipindah ke entry
-  * trailing_update()   : SL mengikuti harga (percent / ATR), monoton naik
+  * trailing_update()   : SL mengikuti harga (persen), monoton naik
 """
 
 from __future__ import annotations
 
 from typing import Optional
-
-from bot.models import Candle
 
 
 # ---------------------------------------------------------------------------
@@ -126,43 +124,26 @@ def should_trigger_breakeven(price: float, entry: float, initial_stop: float,
 # Trailing stop
 # ---------------------------------------------------------------------------
 
-def atr(candles: list[Candle], period: int) -> float:
-    """Average True Range klasik (Wilder sederhana = rata-rata TR)."""
-    if not candles or period < 1:
-        return 0.0
-    trs = []
-    prev_close = None
-    for c in candles[-(period + 1):]:
-        if prev_close is None:
-            trs.append(c.high - c.low)
-        else:
-            trs.append(max(c.high - c.low, abs(c.high - prev_close), abs(c.low - prev_close)))
-        prev_close = c.close
-    return sum(trs) / len(trs) if trs else 0.0
-
-
-def trailing_stop_price(highest: float, mode: str, percent_pct: float,
-                        atr_value: float, atr_multiplier: float) -> float:
+def trailing_stop_price(highest: float, percent_pct: float) -> float:
     """
     Kandidat SL trailing berdasarkan harga tertinggi sejak entry:
-      percent -> highest x (1 - percent_pct%)
-      atr     -> highest - atr_multiplier x ATR
+    highest x (1 - percent_pct%).
+
+    (Mode ATR pernah tersedia di sini; dihapus atas permintaan pemilik bot
+    karena tidak pernah dipakai dan tidak bisa divalidasi backtest.)
     """
     if highest <= 0:
         return 0.0
-    if mode == "atr" and atr_value > 0:
-        return highest - atr_multiplier * atr_value
     return highest * (1.0 - percent_pct / 100.0)
 
 
-def update_trailing(current_sl: float, highest: float, entry: float,
-                    mode: str, percent_pct: float, atr_value: float,
-                    atr_multiplier: float) -> float:
+def update_trailing(current_sl: float, highest: float,
+                    percent_pct: float) -> float:
     """
     SL trailing baru. SL TIDAK PERNAH turun (monoton naik) dan tidak boleh
     di bawah SL saat ini. Kandidat hanya dipakai kalau lebih tinggi.
     """
-    candidate = trailing_stop_price(highest, mode, percent_pct, atr_value, atr_multiplier)
+    candidate = trailing_stop_price(highest, percent_pct)
     return max(current_sl, candidate)
 
 

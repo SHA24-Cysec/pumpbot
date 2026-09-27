@@ -107,6 +107,16 @@ CREATE TABLE IF NOT EXISTS kv (
 class Database:
     """Wrapper SQLite thread-safe (satu koneksi + lock; operasi mikro-detik)."""
 
+    # Kolom yang boleh di-update lewat update_trade(). Whitelist ini
+    # menutup jalur SQL injection lewat nama kolom meski saat ini semua
+    # pemanggil memakai nama literal (pencegahan berlapis).
+    _UPDATABLE_COLS = frozenset({
+        "status", "qty_remaining", "stop_loss", "initial_stop", "take_profits",
+        "be_triggered", "trail_active", "highest_price", "realized_pnl",
+        "fees_paid", "exit_time", "exit_price", "exit_reason", "exit_mode",
+        "score", "entry_reason", "quote_value",
+    })
+
     def __init__(self, path: str = "data/pumpbot.db"):
         self.path = path
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -153,6 +163,10 @@ class Database:
         """Update kolom posisi terbuka (qty_remaining, stop_loss, be_triggered, dst.)."""
         if not fields:
             return
+        unknown = set(fields) - self._UPDATABLE_COLS
+        if unknown:
+            raise ValueError(
+                f"update_trade: kolom tidak dikenal: {sorted(unknown)}")
         cols = ", ".join(f"{k} = ?" for k in fields)
         vals = list(fields.values()) + [trade_id]
         self._exec(f"UPDATE trades SET {cols} WHERE id = ?", tuple(vals))

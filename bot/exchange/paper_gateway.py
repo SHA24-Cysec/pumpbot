@@ -266,7 +266,7 @@ class PaperGateway(ExchangeGateway):
     # STREAMING (callback dibungkus agar harga pasar ikut terekam)
     # ==================================================================
     async def subscribe(self, symbols, on_candle, on_trade, on_book,
-                        on_ticker) -> None:
+                        on_ticker, kline_interval: str = "1m") -> None:
         """
         Langganan stream publik Binance.
 
@@ -311,7 +311,8 @@ class PaperGateway(ExchangeGateway):
             on_ticker(sym, ticker)
 
         await self._market.subscribe(symbols, wrap_candle, wrap_trade,
-                                     wrap_book, wrap_ticker)
+                                     wrap_book, wrap_ticker,
+                                     kline_interval=kline_interval)
 
     # ==================================================================
     # HARGA ACUAN

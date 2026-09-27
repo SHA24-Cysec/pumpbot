@@ -263,7 +263,8 @@ ribu candle dengan threshold di bawah 60 (pruning tidak aktif), kurang lebih
 - Skor entry hanya proksi candle, bukan replika skor live.
 - Resolusi intrabar terbatas pada candle 1 menit; urutan tick di dalam candle
   tidak diketahui sehingga dipakai asumsi pesimistis.
-- Trailing mode ATR dan take profit multi target tidak dioptimasi.
+- Take profit multi target tidak dioptimasi. (Trailing ATR sudah dihapus
+  dari bot; trailing yang diuji hanya mode persen.)
 - Filter LOT_SIZE dan MIN_NOTIONAL diabaikan (qty dianggap pecahan bebas).
 - Tidak ada model partial fill maupun dampak likuiditas.
 - Hasil backtest bukan jaminan hasil live.

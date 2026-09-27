@@ -6,7 +6,7 @@ Untuk SETIAP posisi terbuka:
   2. BREAKEVEN  : harga mencapai +1R dari SL awal
                   -> pindahkan SL ke entry + buffer (posisi jadi bebas risiko).
   3. TRAILING   : langsung setelah breakeven, SL terus naik mengikuti harga
-                  (percent atau ATR) -> mengunci profit selama tren lanjut.
+                  (jarak persen dari harga tertinggi) -> mengunci profit.
   4. MANUAL EXIT: kalau mode manual (tanpa OCO di exchange), bot sendiri
                   yang menjual saat TP/SL tersentuh.
   5. REKONSILIASI OCO (tiap beberapa detik): cek apakah TP/SL OCO sudah
@@ -26,7 +26,6 @@ from bot.data_collector.collector import DataCollector
 from bot.execution.executor import Executor
 from bot.models import Position
 from bot.risk_management.stops import (
-    atr,
     breakeven_price,
     should_trigger_breakeven,
     should_update_exit_order,
@@ -84,6 +83,7 @@ class PositionManager:
         if price <= 0:
             return
         pos._last_price = price  # cache utk perhitungan nilai posisi
+        self.executor.last_prices[pos.symbol] = price  # fallback jalur lain
         pos.highest_price = max(pos.highest_price, price)
 
         manual_mode = (pos.exit_mode == "manual") or pos.oco_fallback
@@ -123,21 +123,11 @@ class PositionManager:
             pos.trail_active = True   # aktif otomatis setelah BE; jalan terus
             self.executor.db.update_trade(pos.trade_id, trail_active=1)
         if pos.trail_active:
-            atr_value = 0.0
-            if self.cfg.trailing.mode == "atr":
-                buf = self.collector.buffer(pos.symbol)
-                if buf and buf.candles:
-                    atr_value = atr(list(buf.candles)[-self.cfg.trailing.atr_period - 1:],
-                                    self.cfg.trailing.atr_period)
             old_sl = pos.stop_loss
             new_sl = update_trailing(
                 current_sl=old_sl,
                 highest=pos.highest_price,
-                entry=pos.entry_price,
-                mode=self.cfg.trailing.mode,
                 percent_pct=self.cfg.trailing.percent_pct,
-                atr_value=atr_value,
-                atr_multiplier=self.cfg.trailing.atr_multiplier,
             )
             # hanya republish order kalau SL naik cukup berarti (hemat rate limit)
             if should_update_exit_order(old_sl, new_sl, self.cfg.trailing.update_step_pct):

@@ -16,7 +16,6 @@ Yang dijaga:
 import csv
 import io
 import json
-import math
 import os
 import random
 import sys

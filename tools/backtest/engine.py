@@ -156,9 +156,8 @@ def simulate_trade(candles: list[Candle], entry_idx: int, params: Params,
             trail_on = True
         if trail_on:
             new_sl = update_trailing(
-                current_sl=stop, highest=highest, entry=entry,
-                mode="percent", percent_pct=params.trail_pct,
-                atr_value=0.0, atr_multiplier=0.0,
+                current_sl=stop, highest=highest,
+                percent_pct=params.trail_pct,
             )
             if should_update_exit_order(stop, new_sl, params.trail_step_pct):
                 stop = new_sl

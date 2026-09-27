@@ -50,7 +50,6 @@ ALLOWED_KEYS: dict[str, type] = {
     "breakeven.trigger_rr": float,
     "breakeven.buffer_pct": float,
     "trailing.enabled": bool,
-    "trailing.mode": str,
     "trailing.percent_pct": float,
     "trailing.update_step_pct": float,
     # --- lookback detector ---
@@ -69,10 +68,12 @@ ALLOWED_KEYS: dict[str, type] = {
 }
 
 # Nilai teks yang diizinkan untuk kunci bertipe string.
+# take_profit.mode mengikuti validasi bot (rr | multi | single); nilai lain
+# seperti "percent" akan lolos di sini tapi ditolak load_config sehingga
+# seluruh penulisan dibatalkan.
 ALLOWED_ENUMS: dict[str, tuple[str, ...]] = {
     "stops.mode": ("percent", "structure"),
-    "take_profit.mode": ("rr", "percent"),
-    "trailing.mode": ("percent", "atr"),
+    "take_profit.mode": ("rr", "multi", "single"),
 }
 
 BACKUP_DIRNAME = "backup"

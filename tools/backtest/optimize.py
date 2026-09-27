@@ -784,8 +784,6 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print("Parameter yang TIDAK dioptimasi di sini:")
     print(f"  stops.mode            : {cfg.stops.mode} (hanya percent yang diuji)")
-    print(f"  trailing mode ATR     : atr_period={cfg.trailing.atr_period}, "
-          f"atr_multiplier={cfg.trailing.atr_multiplier}")
     print("  take_profit multi target dan porsi jual parsial")
     print(f"  trailing.update_step_pct tetap {cfg.trailing.update_step_pct} "
           f"dari config")

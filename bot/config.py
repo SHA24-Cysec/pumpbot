@@ -199,11 +199,10 @@ class BreakevenCfg:
 @dataclass
 class TrailingCfg:
     enabled: bool = True
-    mode: str = "percent"          # percent | atr
-    # Default: setelah BE aktif, SL mengikuti high dengan jarak 0,5%.
+    # Default: setelah BE aktif, SL mengikuti harga tertinggi dengan jarak 0,5%.
+    # (Mode ATR trailing dihapus dari bot; kunci lama mode/atr_period/
+    #  atr_multiplier ditolak saat load agar config basi tidak lolos diam-diam.)
     percent_pct: float = 0.5
-    atr_period: int = 14
-    atr_multiplier: float = 2.5
     update_step_pct: float = 0.15
 
 
@@ -378,6 +377,28 @@ def load_config(path: str) -> Config:
     with open(path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
 
+    # Kunci trailing yang sudah DIHAPUS bersama fitur ATR trailing.
+    # _build() memang mengabaikan kunci tak dikenal secara diam-diam, tetapi
+    # untuk kunci yang sengaja dipensiunkan itu berbahaya: pengguna bisa
+    # berpikir trailing ATR-nya masih aktif padahal tidak. Maka ditolak
+    # eksplisit dengan pesan cara memperbaikinya.
+    _REMOVED_TRAILING_KEYS = {
+        "mode": "trailing.mode",
+        "atr_period": "trailing.atr_period",
+        "atr_multiplier": "trailing.atr_multiplier",
+    }
+    trailing_raw = raw.get("trailing")
+    if isinstance(trailing_raw, dict):
+        for k, label in _REMOVED_TRAILING_KEYS.items():
+            if k in trailing_raw:
+                raise ConfigError(
+                    f"Kunci '{label}' sudah tidak dipakai: fitur ATR trailing "
+                    f"dihapus dari bot. Hapus baris tersebut dari config.yaml. "
+                    f"Trailing sekarang hanya diatur lewat trailing.enabled, "
+                    f"trailing.percent_pct, dan trailing.update_step_pct "
+                    f"(jarak persen dari harga tertinggi)."
+                )
+
     cfg = Config()
     for key, value in raw.items():
         if key in _SUBDATACLASS_FIELDS:
@@ -396,9 +417,24 @@ def load_config(path: str) -> Config:
     # Normalisasi daftar target TP -> list[TPTarget]
     tp_raw = raw.get("take_profit") or {}
     if isinstance(tp_raw, dict) and "targets" in tp_raw:
+        raw_targets = tp_raw["targets"]
+        if not isinstance(raw_targets, list):
+            raise ConfigError(
+                "take_profit.targets harus berupa daftar map, contoh: "
+                "[{gain_pct: 1.2, sell_pct: 50}, {gain_pct: 2.5, sell_pct: 50}]")
         targets = []
-        for i, t in enumerate(tp_raw["targets"]):
-            targets.append(TPTarget(float(t.get("gain_pct", 0)), float(t.get("sell_pct", 0))))
+        for i, t in enumerate(raw_targets):
+            if not isinstance(t, dict):
+                raise ConfigError(
+                    f"take_profit.targets[{i}] harus map dengan kunci "
+                    f"'gain_pct' dan 'sell_pct' (dapat: {type(t).__name__})")
+            try:
+                targets.append(TPTarget(float(t.get("gain_pct", 0)),
+                                        float(t.get("sell_pct", 0))))
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"take_profit.targets[{i}]: gain_pct/sell_pct harus "
+                    f"angka ({exc})") from exc
         cfg.take_profit.targets = targets
 
     # ---------------- Override environment non-strategi ----------------
@@ -661,14 +697,8 @@ def validate(cfg: Config) -> list[str]:
         errors.append("breakeven.buffer_pct harus di rentang 0..2 persen")
 
     t = cfg.trailing
-    if t.mode not in ("percent", "atr"):
-        errors.append("trailing.mode harus 'percent' atau 'atr'")
     if not 0.1 <= t.percent_pct <= 20:
         errors.append("trailing.percent_pct harus di rentang 0.1..20 persen")
-    if t.atr_period < 2:
-        errors.append("trailing.atr_period minimal 2")
-    if t.atr_multiplier <= 0:
-        errors.append("trailing.atr_multiplier harus > 0")
     if t.update_step_pct <= 0:
         errors.append("trailing.update_step_pct harus > 0")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import logging.handlers
 import os
@@ -72,6 +73,10 @@ def notify(message: str, level: str = "INFO") -> None:
     """
     Kirim notifikasi penting ke Telegram (jika dikonfigurasi via .env)
     dan selalu catat ke log.
+
+    Pengiriman Telegram memakai requests BLOKIR (timeout 10 dtk). Bila
+    dipanggil dari dalam event loop asyncio (bot berjalan), POST dieksekusi
+    di thread pool supaya loop bot tidak ikut membeku sampai 10 detik.
     """
     log_fn = getattr(logger, level.lower() if level.lower() in ("info", "warning", "error") else "info")
     log_fn(f"[NOTIF] {message}")
@@ -81,6 +86,19 @@ def notify(message: str, level: str = "INFO") -> None:
     if not token or not chat_id:
         return  # Telegram tidak dikonfigurasi -> cukup log saja
 
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        loop.run_in_executor(None, _post_telegram, token, chat_id, message)
+    else:
+        _post_telegram(token, chat_id, message)
+
+
+def _post_telegram(token: str, chat_id: str, message: str) -> None:
+    """Kirim satu pesan ke Telegram; kegagalan tidak boleh menjatuhkan bot."""
     try:
         requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",

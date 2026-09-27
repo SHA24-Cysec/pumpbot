@@ -224,6 +224,9 @@ class BinanceGateway(ExchangeGateway):
         self._stream_handles = []
         self._watchdog_task: Optional[asyncio.Task] = None
         self._subscribed_symbols: list[str] = []
+        # Interval kline yang dipakai subscribe (disimpan untuk watchdog
+        # yang me-langgan ulang sendiri). Default "1m".
+        self._kline_interval: str = "1m"
         self._cbs: dict = {}
         # Cache filter exchangeInfo. Dipakai juga saat membuat OCO agar semua
         # harga leg OCO (TP, stop trigger, stop-limit) patuh PRICE_FILTER.
@@ -232,14 +235,21 @@ class BinanceGateway(ExchangeGateway):
                     f"depth={self._depth_levels} level")
 
     # ------------------------------------------------------------------ util
-    async def _rest(self, fn, *args, **kwargs):
+    async def _rest(self, fn, *args, retry_transient: bool = True, **kwargs):
         """
-        Panggil REST SDK dengan retry cerdas:
-          - 429/5xx/network -> exponential backoff (karena order trading
-            tidak boleh asal diulang, retry HANYA untuk operasi idempoten
-            yang aman: query data. Order tetap diteruskan error-nya ke pemanggil).
+        Panggil REST SDK dengan retry cerdas.
+
+        - 429 (rate limit): request DITOLAK sebelum diproses, aman diulang
+          untuk semua jenis endpoint setelah menunggu Retry-After.
+        - NetworkError/ServerError (5xx/timeout): status order TIDAK DIKETAHUI.
+          Binance sendiri mendokumentasikan 5xx sebagai "status tidak bisa
+          dipastikan; cek dengan GET order". Maka retry HANYA diberikan ke
+          operasi idempoten (query data, cancel). Untuk PEMASANGAN order
+          (new_order / order_oco), retry buta bisa membuat ORDER GANDA pada
+          mode live - pemanggil harus set retry_transient=False.
         """
         delay = 1.0
+        last_exc: Optional[Exception] = None
         for attempt in range(1, 6):
             try:
                 return _to_plain(await asyncio.to_thread(fn, *args, **kwargs))
@@ -249,9 +259,15 @@ class BinanceGateway(ExchangeGateway):
                 await asyncio.sleep(min(wait, 60))
                 delay *= 2
             except (NetworkError, ServerError) as exc:
+                last_exc = exc
+                if not retry_transient:
+                    # order placement: status tidak diketahui, jangan diulang
+                    raise
                 logger.warning(f"REST error jaringan/server (percobaan {attempt}/5): {exc}")
                 await asyncio.sleep(delay)
                 delay *= 2
+        if last_exc is not None:
+            raise last_exc
         raise NetworkError("REST gagal setelah 5 percobaan")
 
     # -------------------------------------------------------------- lifecycle
@@ -475,15 +491,22 @@ class BinanceGateway(ExchangeGateway):
             self._client.rest_api.klines, symbol=symbol,
             interval=enum_interval, limit=limit,
         )
+        # Baris TERAKHIR respons klines adalah candle yang MASIH BERJALAN
+        # (close_time di masa depan). Menandainya closed=True membuat buffer
+        # menyimpan snapshot parsial lalu duplikat saat WS mengirim event
+        # close candle yang sama.
+        now = int(time.time() * 1000)
         candles = []
         for k in rows:
             # format array: [openTime, o, h, l, c, vol, closeTime, quoteVol,
             #                count, takerBuyBase, takerBuyQuote, ignore]
+            close_time = int(k[6])
             candles.append(Candle(
-                open_time=int(k[0]), close_time=int(k[6]),
+                open_time=int(k[0]), close_time=close_time,
                 open=_f(k[1]), high=_f(k[2]), low=_f(k[3]), close=_f(k[4]),
                 volume=_f(k[5]), quote_volume=_f(k[7]), trades=int(_f(k[8])),
-                taker_buy_volume=_f(k[9]), closed=True,
+                taker_buy_volume=_f(k[9]),
+                closed=close_time < now,
             ))
         return candles
 
@@ -559,18 +582,31 @@ class BinanceGateway(ExchangeGateway):
             await asyncio.sleep(self.SUBSCRIBE_RETRY_WAIT_S * attempt)
         raise RuntimeError(f"subscribe {label}: tidak terjangkau")
 
-    async def subscribe(self, symbols, on_candle, on_trade, on_book, on_ticker) -> None:
-        """Berlangganan 4 stream per simbol lewat satu koneksi WebSocket gabungan."""
+    async def subscribe(self, symbols, on_candle, on_trade, on_book, on_ticker,
+                        kline_interval: str = "1m") -> None:
+        """Berlangganan 4 stream per simbol lewat satu koneksi WebSocket gabungan.
+
+        ``kline_interval`` HARUS sama dengan ``data.kline_interval`` di config
+        supaya candle WS sejajar dengan seed REST. Sebelumnya interval ini
+        dihardcode "1m" sehingga config 3m/5m/15m menghasilkan buffer tercampur
+        (seed 3m dari REST + update 1m dari WS).
+        """
         self._subscribed_symbols = list(symbols)
         self._cbs = {"candle": on_candle, "trade": on_trade,
                      "book": on_book, "ticker": on_ticker}
+        if kline_interval in _INTERVAL_MAP:
+            self._kline_interval = kline_interval
+        else:
+            logger.warning(
+                "kline_interval %r tidak dikenal, memakai '1m'", kline_interval)
+            self._kline_interval = "1m"
         # CATATAN PENTING: interval & levels HARUS string/angka murni,
         # BUKAN enum. Versi SDK tertentu membangun nama stream rusak bila
         # diberi enum: "btcusdt@kline_KlineIntervalEnum.INTERVAL_1m"
         # (server menerima SUBSCRIBE tanpa error tapi stream tidak pernah
         # ada -> orderbook/kline tidak pernah masuk -> GATE abadi).
         # Diverifikasi: string "1m" / angka levels -> nama stream benar.
-        interval_ws = "1m"
+        interval_ws = self._kline_interval
         levels = self._depth_levels   # tangga 5/10/20 dari imbalance_levels
 
 
@@ -735,12 +771,12 @@ class BinanceGateway(ExchangeGateway):
             logger.error("Semua stream mati! Mencoba berlangganan ulang...")
             try:
                 await self.subscribe(
-                    self._subscribed_symbols, **{
-                        "on_candle": self._cbs["candle"],
-                        "on_trade": self._cbs["trade"],
-                        "on_book": self._cbs["book"],
-                        "on_ticker": self._cbs["ticker"],
-                    })
+                    self._subscribed_symbols,
+                    on_candle=self._cbs["candle"],
+                    on_trade=self._cbs["trade"],
+                    on_book=self._cbs["book"],
+                    on_ticker=self._cbs["ticker"],
+                    kline_interval=self._kline_interval)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -771,13 +807,25 @@ class BinanceGateway(ExchangeGateway):
         return free, locked
 
     # -------------------------------------------------------------- trading
+    @staticmethod
+    def _client_order_id(prefix: str = "pb") -> str:
+        """ID order unik (maks 36 karakter, charset sah Binance).
+
+        Membantu rekonsiliasi manual via GET /api/v3/order?origClientOrderId
+        bila respons order hilang karena masalah jaringan.
+        """
+        import uuid
+        return f"{prefix}-{uuid.uuid4().hex[:30]}"
+
     async def market_buy(self, symbol: str, quote_qty: float) -> Fill:
         resp = await self._rest(self._client.rest_api.new_order,
                                 symbol=symbol,
                                 side=NewOrderSideEnum("BUY"),
                                 type=NewOrderTypeEnum("MARKET"),
                                 quote_order_qty=math.floor(quote_qty * 100) / 100,  # 2 desimal
-                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("RESULT"))
+                                new_client_order_id=self._client_order_id("pb-b"),
+                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("RESULT"),
+                                retry_transient=False)
         return self._fill_from_order(resp, symbol)
 
     async def market_sell(self, symbol: str, qty: float) -> Fill:
@@ -786,7 +834,9 @@ class BinanceGateway(ExchangeGateway):
                                 side=NewOrderSideEnum("SELL"),
                                 type=NewOrderTypeEnum("MARKET"),
                                 quantity=qty,
-                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("RESULT"))
+                                new_client_order_id=self._client_order_id("pb-s"),
+                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("RESULT"),
+                                retry_transient=False)
         return self._fill_from_order(resp, symbol)
 
     async def place_limit_buy(self, symbol: str, qty: float, price: float) -> int:
@@ -795,7 +845,9 @@ class BinanceGateway(ExchangeGateway):
                                 side=NewOrderSideEnum("BUY"),
                                 type=NewOrderTypeEnum("LIMIT"),
                                 time_in_force=NewOrderTimeInForceEnum("GTC"),
-                                quantity=qty, price=price)
+                                quantity=qty, price=price,
+                                new_client_order_id=self._client_order_id("pb-l"),
+                                retry_transient=False)
         return int(_f(resp.get("orderId")))
 
     async def get_order_status(self, symbol: str, order_id: int) -> dict:
@@ -888,7 +940,9 @@ class BinanceGateway(ExchangeGateway):
                                 price=tp_price,
                                 stop_price=stop_price,
                                 stop_limit_price=sl_limit,
-                                stop_limit_time_in_force=OrderOcoStopLimitTimeInForceEnum("GTC"))
+                                list_client_order_id=self._client_order_id("pb-oco"),
+                                stop_limit_time_in_force=OrderOcoStopLimitTimeInForceEnum("GTC"),
+                                retry_transient=False)
         return int(_f(resp.get("orderListId")))
 
     async def cancel_oco(self, symbol: str, order_list_id: int) -> bool:

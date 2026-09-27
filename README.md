@@ -8,7 +8,7 @@ Bot trading otomatis untuk **Binance Spot** yang:
    jarak stop loss sehingga rugi maksimum per trade selalu sesuai persen yang
    Anda tentukan.
 3. **Mengelola posisi otomatis**: stop loss, take profit (single/multi/partial),
-   breakeven, dan trailing stop (percent / ATR).
+   breakeven, dan trailing stop berbasis persen.
 4. **Dashboard web real-time** (FastAPI + WebSocket): saldo, posisi, histori,
    statistik performa, equity curve, panel skor sinyal, dan kontrol manual
    (pause/resume, tutup posisi, ubah parameter risiko tanpa restart).
@@ -92,7 +92,7 @@ tidak dipakai di sini.
                                     │
         ┌───────────────────────────▼───────────────────────────┐
         │  POSITION MANAGER (loop 1 detik)                        │
-        │  • breakeven → trailing stop (percent/ATR)              │
+        │  • breakeven → trailing stop (persen)                   │
         │  • eksekusi TP/SL manual • rekonsiliasi status OCO      │
         │  • watchdog darurat                                      │
         └───────────────┬─────────────────────────┬───────────────┘
@@ -194,6 +194,7 @@ file itu; tidak ada profile konfigurasi lain maupun override mode dari CLI/.env.
 |---|---|
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | **hanya** wajib jika `mode` di `config/config.yaml` adalah `live`. Mode `paper` tidak memakainya sama sekali |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` | opsional; menimpa host/port dashboard di YAML |
+| `DASHBOARD_TOKEN` | opsional namun **sangat disarankan** bila dashboard di-bind ke selain `127.0.0.1`: semua endpoint HTTP & WebSocket mensyaratkan token ini. Buka `http://IP:PORT/?token=...` sekali (token disimpan jadi cookie) atau kirim header `X-Auth-Token` |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | opsional, notifikasi start/stop/halt harian |
 | `LOG_LEVEL` | opsional; menimpa level logging YAML |
 
@@ -316,6 +317,14 @@ Dashboard: buka **http://localhost:8000** (atau `DASHBOARD_PORT` Anda).
 
 Semua panel update real-time via WebSocket (`/ws`), tanpa refresh manual:
 
+> **Keamanan akses:** dashboard dapat mengontrol bot (tutup posisi, ubah
+> risk %, pause/resume). Bila di-bind ke selain `127.0.0.1`, set
+> `DASHBOARD_TOKEN` di `.env` supaya semua endpoint HTTP dan WebSocket
+> mensyaratkan token; buka dashboard dengan `/?token=...` satu kali. Tanpa
+> token, bot mencatat peringatan keamanan di log saat start dengan bind
+> non-localhost.
+
+
 | Panel | Isi |
 |---|---|
 | **Kartu ringkasan** | equity, saldo tersedia/terkunci, PnL harian, expectancy, dan total PnL tetap dalam quote asset + estimasi Rupiah dari market Binance |
@@ -388,7 +397,7 @@ Hasil dikelompokkan menjadi empat grup yang bisa dicentang terpisah:
 
 | Grup | Kunci yang ditulis | Default |
 |---|---|---|
-| **Exit** | `stops.mode`, `stops.percent_pct`, `take_profit.mode`, `take_profit.rr`, `breakeven.enabled`, `breakeven.trigger_rr`, `breakeven.buffer_pct`, `trailing.enabled`, `trailing.mode`, `trailing.percent_pct`, `trailing.update_step_pct` | aktif |
+| **Exit** | `stops.mode`, `stops.percent_pct`, `take_profit.mode`, `take_profit.rr`, `breakeven.enabled`, `breakeven.trigger_rr`, `breakeven.buffer_pct`, `trailing.enabled`, `trailing.percent_pct`, `trailing.update_step_pct` | aktif |
 | **Lookback sinyal** | `signal.min_candles`, `signal.volume.ma_period`, `signal.volume.spike_scale`, `signal.price_action.structure_candles`, `signal.price_action.breakout_lookback`, `signal.price_action.swing_neighbors` | nonaktif |
 | **Skoring** | `signal.score_threshold`, `signal.weights.price_action`, `signal.weights.volume` | nonaktif |
 | **Cooldown** | `signal.cooldown_after_exit_min` | ikut hasil |
@@ -401,8 +410,9 @@ data historis klines. Threshold yang optimal di backtest belum tentu optimal
 di live. Terapkan grup ini hanya kalau Anda paham konsekuensinya.
 
 Parameter yang **tidak** ikut dioptimasi dilaporkan di ringkasan hasil, antara
-lain: stop berbasis struktur atau ATR, trailing mode ATR, multi-level TP dengan
-jual parsial, serta pembulatan LOT_SIZE dan MIN_NOTIONAL.
+lain: stop berbasis struktur, multi-level TP dengan jual parsial, serta
+pembulatan LOT_SIZE dan MIN_NOTIONAL. (Mode trailing ATR sudah dihapus dari
+bot; trailing hanya memakai jarak persen dari harga tertinggi.)
 
 ### Keamanan penulisan config
 
@@ -595,16 +605,22 @@ Urutan ringkas untuk entry 100, SL 99 dan TP 102:
 python -m pytest tests/ -v
 ```
 
-467 unit test lulus pada perintah baseline (`python -m pytest -q
---ignore=tests/test_backtest_parity.py --ignore=tests/test_engine_max_hold.py
---ignore=tests/test_grid_cache.py`), mencakup: position sizing (risiko tidak pernah melebihi target),
-pembulatan LOT_SIZE/MIN_NOTIONAL, SL awal struktur/persen, level TP,
-trigger & harga breakeven, trailing monoton, ATR, statistik (win rate, profit
+499 unit test lulus dengan perintah di atas, mencakup: position sizing (risiko tidak pernah melebihi target),
+pembulatan LOT_SIZE/MIN_NOTIONAL (termasuk koreksi galat float IEEE 754 pada
+`round_qty`/`round_price`), SL awal struktur/persen, level TP,
+trigger & harga breakeven, trailing monoton, statistik (win rate, profit
 factor, max drawdown), seluruh detector (skor/gate/veto), validasi
 konfigurasi, filter Anchored VWAP (rumus, anchor, gate, cache, integrasi
 engine dan backtest), plus dua test end-to-end executor:
 race-condition "re-place OCO vs tutup posisi manual" (anti OCO yatim/penjualan
 ganda) dan jalur exit stop-loss beserta konsistensi akuntansi dana.
+
+`tests/test_audit_fixes.py` (30 test) menjaga perbaikan hasil audit:
+pembulatan float yang tepat, posisi tidak menggantung OPEN setelah SL terisi
+lewat jalur re-place OCO, pembatalan eksplisit OCO chunk lain di exchange,
+dedup candle berdasarkan open_time, interval kline WS mengikuti config,
+penolakan `take_profit.targets` yang salah bentuk, whitelist kolom
+`update_trade`, dan autentikasi dashboard `DASHBOARD_TOKEN`.
 
 Fitur backtest dashboard ditutup 165 test tambahan:
 `tests/test_backtest_service.py` (68) untuk pembentukan grid, dedup kombinasi,

@@ -168,7 +168,7 @@ def test_nilai_yang_membuat_config_tidak_sah_dibatalkan(cfg, kunci, nilai):
 @pytest.mark.parametrize("kunci,nilai", [
     ("stops.mode", "ngawur"),
     ("take_profit.mode", "entah"),
-    ("trailing.mode", "xyz"),
+    ("trailing.percent_pct", "abc"),
     ("breakeven.enabled", "mungkin"),
     ("signal.volume.ma_period", "abc"),
     ("stops.percent_pct", "bukan angka"),

@@ -8,6 +8,12 @@ Dashboard web real-time.
 - POST /api/backtest/... : jalankan, batalkan, dan terapkan hasil grid search
 - GET  /api/backtest/... : status job dan unduhan CSV hasil
 
+KEAMANAN: dashboard mengontrol bot trading (tutup posisi, ubah risk %).
+Set environment DASHBOARD_TOKEN untuk membatasi akses: semua endpoint HTTP
+dan WebSocket lalu mensyaratkan token tersebut (via cookie, query ?token=,
+atau header X-Auth-Token). Tanpa token, dashboard terbuka seperti sebelumnya
+- pastikan host tetap 127.0.0.1 dalam kondisi itu.
+
 Snapshot berisi: saldo, posisi terbuka, histori, statistik, equity curve,
 skor sinyal terbaru, status bot, dan ringkasan job backtest.
 """
@@ -15,13 +21,14 @@ skor sinyal terbaru, status bot, dan ringkasan job backtest.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Optional, Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -34,11 +41,36 @@ logger = logging.getLogger("pumpbot.dash")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
+# Nama cookie sesi dashboard (dipakai bila DASHBOARD_TOKEN di-set).
+TOKEN_COOKIE = "pumpbot_token"
+
 # Backtest hanya boleh jalan saat bot di-pause: grid search memakan CPU dan
 # tidak boleh berebut sumber daya dengan pengawasan posisi yang sedang hidup.
 PESAN_WAJIB_PAUSE = ("Pause bot dulu sebelum menjalankan backtest. "
                      "Grid search memakai CPU penuh dan tidak boleh berebut "
                      "sumber daya dengan bot yang sedang trading.")
+
+
+def _dashboard_token() -> str:
+    """Token akses dashboard dari environment (kosong = tanpa autentikasi)."""
+    return (os.getenv("DASHBOARD_TOKEN") or "").strip()
+
+
+def _request_token(request: Request) -> str:
+    """Token dari salah satu sumber: query param, header, atau cookie."""
+    token = (request.query_params.get("token")
+             or request.headers.get("x-auth-token") or "")
+    if not token:
+        token = request.cookies.get(TOKEN_COOKIE, "")
+    return token
+
+
+def _token_valid(token: str) -> bool:
+    """Perbandingan konstan-waktu terhadap token yang diharapkan."""
+    expected = _dashboard_token()
+    if not expected:
+        return True  # autentikasi tidak diaktifkan
+    return hmac.compare_digest(token, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +269,42 @@ def create_dashboard_app(ctx) -> FastAPI:
     # TIDAK ikut mati kalau hanya mengandalkan sinyal ke grup proses bot.
     ctx.backtest = backtest
 
+    # ---------------- autentikasi opsional (DASHBOARD_TOKEN) ----------------
+    @app.middleware("http")
+    async def _auth_middleware(request: Request, call_next):
+        if _dashboard_token():
+            token = _request_token(request)
+            if not _token_valid(token):
+                return JSONResponse(
+                    {"ok": False,
+                     "error": "Akses ditolak: DASHBOARD_TOKEN aktif, "
+                              "kirim ?token=... / header X-Auth-Token."},
+                    status_code=401)
+            # token valid via query param -> simpan sebagai cookie agar
+            # fetch() dan WebSocket berikutnya tidak perlu menyertakan token
+            response = await call_next(request)
+            if request.query_params.get("token") and not request.cookies.get(TOKEN_COOKIE):
+                response.set_cookie(TOKEN_COOKIE, token, httponly=True,
+                                    samesite="strict")
+            return response
+        return await call_next(request)
+
+    # ---------------- cache snapshot WebSocket ----------------
+    # build_snapshot membaca histori + statistik dari SQLite; tanpa cache,
+    # tiap klien WS memicu query penuh (termasuk seluruh trade closed) tiap
+    # detik. Cache 1 detik membuat semua klien berbagi payload yang sama.
+    _snap_cache: dict = {"ts": 0, "payload": None}
+
+    def _snapshot_payload() -> str:
+        ts = now_ms()
+        cached = _snap_cache["payload"]
+        if cached is None or ts - _snap_cache["ts"] >= 900:
+            _snap_cache["payload"] = json.dumps(
+                build_snapshot(ctx, backtest), default=str)
+            _snap_cache["ts"] = ts
+            cached = _snap_cache["payload"]
+        return cached
+
     # ---------------- halaman utama ----------------
     @app.get("/")
     async def index():
@@ -255,17 +323,21 @@ def create_dashboard_app(ctx) -> FastAPI:
     # ---------------- WebSocket broadcast ----------------
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
+        # proteksi token untuk WS: cookie (dikirim browser saat handshake
+        # same-origin) atau query param ?token=
+        if _dashboard_token():
+            token = ws.query_params.get("token") or ws.cookies.get(TOKEN_COOKIE, "")
+            if not _token_valid(token):
+                await ws.close(code=4401)
+                return
         await ws.accept()
         clients.add(ws)
         try:
             # kirim snapshot pertama seketika
-            await ws.send_text(json.dumps(build_snapshot(ctx, backtest),
-                                          default=str))
+            await ws.send_text(_snapshot_payload())
             while True:
                 await asyncio.sleep(1.0)
-                payload = json.dumps(build_snapshot(ctx, backtest),
-                                     default=str)
-                await ws.send_text(payload)
+                await ws.send_text(_snapshot_payload())
         except WebSocketDisconnect:
             pass
         except Exception as exc:
@@ -463,10 +535,25 @@ async def run_dashboard(ctx) -> None:
     """Jalankan uvicorn di event loop yang sama dengan bot."""
     import uvicorn
     app = create_dashboard_app(ctx)
-    config = uvicorn.Config(app, host=ctx.cfg.dashboard.host,
-                            port=ctx.cfg.dashboard.port,
+    host = ctx.cfg.dashboard.host
+    port = ctx.cfg.dashboard.port
+    # Peringatan keras: dashboard punya kontrol penuh atas bot trading tanpa
+    # login bawaan. Bind ke interface selain loopback tanpa token = siapa pun
+    # di jaringan itu bisa menutup posisi / mengubah risk % / menjalankan bot.
+    loopback = host in ("127.0.0.1", "localhost", "::1")
+    if not loopback and not _dashboard_token():
+        logger.warning(
+            "!!! KEAMANAN: dashboard di-bind ke %s TANPA DASHBOARD_TOKEN. "
+            "Siapa pun di jaringan tersebut dapat mengontrol bot (tutup "
+            "posisi, ubah risk %%, pause/resume). Set DASHBOARD_TOKEN di "
+            ".env atau ubah dashboard.host ke 127.0.0.1.", host)
+    config = uvicorn.Config(app, host=host, port=port,
                             log_level="warning", access_log=False)
     server = uvicorn.Server(config)
     ctx.uvicorn_server = server
-    logger.info(f"Dashboard: http://{ctx.cfg.dashboard.host}:{ctx.cfg.dashboard.port}")
+    if _dashboard_token():
+        logger.info("Dashboard: http://%s:%s (autentikasi DASHBOARD_TOKEN aktif)",
+                    host, port)
+    else:
+        logger.info(f"Dashboard: http://{host}:{port}")
     await server.serve()

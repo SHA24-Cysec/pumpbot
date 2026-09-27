@@ -38,9 +38,25 @@ class SymbolBuffer:
     # ------------------------------------------------------------ writers
     def on_candle(self, candle: Candle) -> None:
         """Dipanggil untuk event kline. Simpan yang sudah close, update
-        candle berjalan sebagai referensi volume berjalan."""
+        candle berjalan sebagai referensi volume berjalan.
+
+        Candle closed didedup berdasarkan open_time: event close dari WS
+        bisa datang SETELAH seed REST menyimpan candle berjalan yang sama,
+        dan reconnect WS kadang mengirim ulang candle lama. open_time sama
+        -> ganti baris terakhir dengan data final; open_time lebih tua dari
+        baris terakhir -> dibuang (replay).
+        """
         if candle.closed:
-            self.candles.append(candle)
+            if self.candles:
+                last_ot = self.candles[-1].open_time
+                if candle.open_time == last_ot:
+                    self.candles[-1] = candle
+                elif candle.open_time < last_ot:
+                    pass  # candle lama (replay reconnect) -> abaikan
+                else:
+                    self.candles.append(candle)
+            else:
+                self.candles.append(candle)
         if candle.close > 0:
             self._last_price = candle.close
         self.last_update = now_ms()

@@ -214,7 +214,8 @@ class SimulatedGateway(ExchangeGateway):
         return candles
 
     # ------------------------------------------------------------- streaming
-    async def subscribe(self, symbols, on_candle, on_trade, on_book, on_ticker) -> None:
+    async def subscribe(self, symbols, on_candle, on_trade, on_book, on_ticker,
+                        kline_interval: str = "1m") -> None:
         self._cbs = {"candle": on_candle, "trade": on_trade,
                      "book": on_book, "ticker": on_ticker}
 

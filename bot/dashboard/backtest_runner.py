@@ -25,7 +25,7 @@ import signal
 import sys
 import time
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 logger = logging.getLogger("pumpbot.backtest")
 

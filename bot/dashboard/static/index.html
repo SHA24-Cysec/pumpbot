@@ -809,7 +809,7 @@ function renderPositions(){
     const modeText = p.exit_mode + (p.oco_failure_code ? " ⚠ " + p.oco_failure_code : "");
     const modeTitle = p.oco_failure_detail ? " title='" + esc(p.oco_failure_detail) + "'" : "";
     return "<tr>"+
-      "<td><b>"+p.symbol+"</b></td>"+
+      "<td><b>"+esc(p.symbol)+"</b></td>"+
       "<td>"+p.entry_price.toPrecision(6)+"</td>"+
       "<td>"+p.price.toPrecision(6)+"</td>"+
       "<td>"+fmt(p.qty_remaining,4)+"</td>"+
@@ -834,14 +834,14 @@ function renderHistory(){
   }
   tb.innerHTML = S.history.slice(0,100).map(t =>
     "<tr>"+
-    "<td><b>"+t.symbol+"</b></td>"+
+    "<td><b>"+esc(t.symbol)+"</b></td>"+
     "<td>"+tsFull(t.entry_time)+"</td>"+
     "<td>"+tsFull(t.exit_time)+"</td>"+
     "<td>"+Number(t.entry_price).toPrecision(6)+"</td>"+
     "<td>"+Number(t.exit_price||0).toPrecision(6)+"</td>"+
     "<td>"+fmt(t.qty_total,4)+"</td>"+
     "<td class='"+cls(t.realized_pnl)+"'>"+(t.realized_pnl>=0?"+":"")+money(t.realized_pnl)+"</td>"+
-    "<td class='mut'>"+(t.exit_reason||"")+"</td>"+
+    "<td class='mut'>"+esc(t.exit_reason||"")+"</td>"+
     "</tr>").join("");
 }
 
@@ -871,8 +871,8 @@ function renderSignals(){
                " (jarak " + (Number(vw.dist_pct)||0).toFixed(2) + "%" +
                (vw.reason ? ", " + vw.reason : "") + ")";
     }
-    return "<div class='sigrow' title='"+title+"'>"+
-      "<span class='sym'>"+s.symbol+"</span>"+
+    return "<div class='sigrow' title='"+esc(title)+"'>"+
+      "<span class='sym'>"+esc(s.symbol)+"</span>"+
       "<span class='pr'>"+Number(s.price).toPrecision(6)+"</span>"+
       "<div class='scorebar'><div style='width:"+Math.min(100,s.score)+"%;"+
         "background:"+scoreColor(s.score)+"'></div></div>"+
@@ -882,9 +882,9 @@ function renderSignals(){
   // rincian detector simbol teratas
   const top = S.signals[0];
   if(top && top.breakdown){
-    $("det").innerHTML = "<b>"+top.symbol+"</b> - " +
+    $("det").innerHTML = "<b>"+esc(top.symbol)+"</b> - " +
       Object.entries(top.breakdown)
-        .map(([k,v]) => k+"=<b>"+v+"</b>").join(", ");
+        .map(([k,v]) => esc(k)+"=<b>"+esc(v)+"</b>").join(", ");
   }
 }
 

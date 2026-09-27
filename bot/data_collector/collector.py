@@ -124,13 +124,15 @@ class DataCollector:
         logger.info(f"Seed selesai: {seeded}/{len(self.watchlist)} simbol punya >= "
                     f"{self.cfg.signal.min_candles} candle")
 
-        # Langganan stream real-time.
+        # Langganan stream real-time. Interval kline WAJIB sama dengan
+        # interval seed REST; jika tidak, buffer mencampur dua satuan waktu.
         await self.gateway.subscribe(
             symbols=self.watchlist,
             on_candle=self._on_candle,
             on_trade=self._on_trade,
             on_book=self._on_book,
             on_ticker=self._on_ticker,
+            kline_interval=d.kline_interval,
         )
         self.ws_alive = True
         logger.info("DataCollector aktif - stream real-time berjalan.")
@@ -182,7 +184,8 @@ class DataCollector:
         await self.gateway.subscribe(
             symbols=added,
             on_candle=self._on_candle, on_trade=self._on_trade,
-            on_book=self._on_book, on_ticker=self._on_ticker)
+            on_book=self._on_book, on_ticker=self._on_ticker,
+            kline_interval=d.kline_interval)
         logger.info(f"Watchlist refresh: +{len(added)} simbol baru: {added}")
         return added
 

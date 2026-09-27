@@ -117,27 +117,50 @@ class SymbolFilters:
     min_notional: float = 5.0
 
     def round_price(self, price: float, mode: str = "nearest") -> float:
-        """Bulatkan harga ke kelipatan tick_size. mode: down|up|nearest."""
+        """Bulatkan harga ke kelipatan tick_size. mode: down|up|nearest.
+
+        Galat float IEEE 754 dikoreksi sebelum pembulatan: tanpa koreksi,
+        1.2/0.0001 = 11999.999999999998 sehingga mode "down" menghasilkan
+        1.1999 (satu tick lebih rendah dari yang diminta). Ratio yang berada
+        dalam epsilon relatif dari bilangan bulat dianggap bulat persis.
+        """
         if self.tick_size <= 0:
             return price
         steps = price / self.tick_size
+        nearest = round(steps)
+        # epsilon absolut 1e-9: cukup untuk menangkap galat float IEEE 754
+        # pada ratio ukuran wajar, tanpa membulatkan NAIK nilai yang memang
+        # sah di bawah integer (prinsip: tidak pernah melebihi qty/harga asal).
+        if abs(steps - nearest) < 1e-9:
+            steps = float(nearest)
         if mode == "down":
             steps = math.floor(steps)
         elif mode == "up":
             steps = math.ceil(steps)
         else:
-            steps = round(steps)
+            steps = float(round(steps))
+        # normalisasi hasil perkalian (3 * 0.1 = 0.30000000000000004)
         return round(steps * self.tick_size, 12)
 
     def round_qty(self, qty: float, market: bool = False) -> float:
         """Bulatkan qty KE BAWAH ke kelipatan step_size (floor agar tidak
-        melebihi saldo/limit)."""
+        melebihi saldo/limit).
+
+        Koreksi galat float diterapkan: tanpa ini 0.3/0.1 = 2.9999999999999996
+        sehingga floor menghasilkan 0.2, dan 0.7/0.1 = 6.999999999999999
+        menghasilkan 0.6000000000000001 yang justru DITOLAK filter LOT_SIZE
+        Binance karena bukan kelipatan step yang sah.
+        """
         step = self.step_size
         if market and self.market_step_size:
             step = max(step, self.market_step_size)
         if step <= 0:
             return qty
-        return math.floor(qty / step) * step
+        steps = qty / step
+        nearest = round(steps)
+        if abs(steps - nearest) < 1e-9:
+            steps = float(nearest)
+        return round(math.floor(steps) * step, 12)
 
     @property
     def price_decimals(self) -> int:

@@ -78,8 +78,14 @@ class ExchangeGateway(ABC):
         on_trade: OnTrade,
         on_book: OnBook,
         on_ticker: OnTicker,
+        kline_interval: str = "1m",
     ) -> None:
-        """Berlangganan stream: kline, aggTrade, partial depth, ticker 24h."""
+        """Berlangganan stream: kline, aggTrade, partial depth, ticker 24h.
+
+        ``kline_interval`` harus sama dengan interval yang dipakai seed REST
+        (config ``data.kline_interval``) supaya candle stream dan candle
+        historis berada pada satuan waktu yang sama.
+        """
 
     # -------------------------------------------------------------- akun
     @abstractmethod

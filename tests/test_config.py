@@ -62,6 +62,50 @@ def test_single_yaml_is_valid_and_loads():
     assert errs == [], errs
 
 
+# ---------------------------------------------------------------------------
+# kunci trailing peninggalan ATR (dihapus) wajib ditolak explisit
+# ---------------------------------------------------------------------------
+
+def _config_dengan_trailing_extra(tmp_path, extra: dict) -> str:
+    """Salinan config.yaml proyek dengan kunci tambahan di section trailing."""
+    import yaml
+    with open(CONFIG, encoding="utf-8") as fh:
+        base = yaml.safe_load(fh)
+    base["trailing"].update(extra)
+    p = tmp_path / "config.yaml"
+    p.write_text(yaml.safe_dump(base), encoding="utf-8")
+    return str(p)
+
+
+@pytest.mark.parametrize("kunci,nilai", [
+    ("mode", "atr"),
+    ("mode", "percent"),          # nilai sah pun tetap ditolak: kuncinya hilang
+    ("atr_period", 14),
+    ("atr_multiplier", 2.5),
+])
+def test_kunci_trailing_atr_ditolak_dengan_pesan(tmp_path, kunci, nilai):
+    p = _config_dengan_trailing_extra(tmp_path, {kunci: nilai})
+    with pytest.raises(ConfigError, match="sudah tidak dipakai"):
+        load_config(p)
+
+
+def test_config_tanpa_kunci_atr_tetap_sah(tmp_path):
+    """Config bersih (tanpa kunci lama) harus tetap lolos, trailing persen hidup."""
+    import yaml
+    with open(CONFIG, encoding="utf-8") as fh:
+        base = yaml.safe_load(fh)
+    base["trailing"].pop("mode", None)
+    base["trailing"].pop("atr_period", None)
+    base["trailing"].pop("atr_multiplier", None)
+    p = tmp_path / "config.yaml"
+    p.write_text(yaml.safe_dump(base), encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.trailing.percent_pct == 0.5
+    assert cfg.trailing.update_step_pct == 0.15
+    assert not hasattr(cfg.trailing, "atr_period"), \
+        "field atr_period harus hilang dari dataclass"
+
+
 def test_zero_risk_rejected():
     cfg = _base_cfg()
     cfg.risk.risk_per_trade_pct = 0.0
