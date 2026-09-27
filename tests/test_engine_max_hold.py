@@ -37,7 +37,7 @@ def _signal(entry_idx=11):
                         swing_low=98.0)]
 
 
-# SL 2,5%, TP 2R, BE 1R, trailing 0,5% — tepat alur strategi live.
+# SL 2,5%, TP 2R, BE 1R, trailing 0,5%, tepat alur strategi live.
 COMBO = dict(threshold=70, sl_pct=2.5, tp_rr=2.0, be_rr=1.0, trail_pct=0.5)
 
 

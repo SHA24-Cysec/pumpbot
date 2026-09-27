@@ -39,12 +39,52 @@ from bot.utils import now_ms, notify
 
 logger = logging.getLogger("pumpbot.main")
 
+# Kunci penyimpanan state akun demo di tabel kv database mode paper.
+PAPER_STATE_KEY = "paper_state"
+
+
+class _PaperStateStore:
+    """
+    Simpan dompet akun demo ke tabel ``kv`` database mode paper.
+
+    Tanpa ini, saldo virtual kembali ke modal awal setiap restart sementara
+    histori trade di database tetap ada, sehingga equity curve dan statistik
+    performa jadi tidak konsisten. Database sudah dipisah per mode, jadi state
+    demo tidak mungkin tercampur dengan akun live.
+    """
+
+    def __init__(self, db, reset_on_start: bool = False):
+        self._db = db
+        self._reset = bool(reset_on_start)
+
+    def load(self):
+        if self._reset:
+            logger.warning("paper.reset_on_start = true -> saldo & aset akun "
+                           "demo dikosongkan ulang ke modal awal.")
+            self._db.kv_set(PAPER_STATE_KEY, "")
+            return None
+        raw = self._db.kv_get(PAPER_STATE_KEY)
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("State akun demo tidak bisa dibaca (%s) -> "
+                           "mulai dari modal awal.", exc)
+            return None
+
+    def save(self, state: dict) -> None:
+        self._db.kv_set(PAPER_STATE_KEY, json.dumps(state))
+
 
 class BotApp:
     """Objek aplikasi utama; juga dipakai dashboard sebagai sumber data (ctx)."""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        # Jalur config yang sedang dipakai; dashboard menulis ulang file ini
+        # saat hasil backtest diterapkan.
+        self.cfg_path = cfg.source_path or os.path.join("config", "config.yaml")
         self.mode = cfg.mode
         self.paused = False
         self.started_at = now_ms()
@@ -77,20 +117,21 @@ class BotApp:
         Bangun DustSweeper (konversi dust -> BNB) kalau diaktifkan di config.
 
         Hanya berjalan di mode LIVE: endpoint SAPI (/sapi/v1/asset/dust)
-        tidak tersedia di testnet, dan simulator paper tidak punya BNB.
+        butuh API key bertanda tangan, sedangkan akun demo tidak memegang
+        aset sungguhan untuk dikonversi.
         """
         if not self.cfg.dust_sweep.enabled:
             return None
         if self.mode != "live":
             logger.warning(
                 "dust_sweep aktif di config tetapi HANYA berjalan di mode "
-                "live (endpoint SAPI tidak tersedia di testnet/paper) "
+                "live (akun demo tidak punya aset BNB sungguhan) "
                 "-> fitur dilewati")
             return None
         try:
             # binance-sdk-wallet = SDK modular resmi Binance untuk endpoint
             # wallet/SAPI (dipisah dari binance-sdk-spot). Dipasang lewat
-            # requirements.txt; impor lazy supaya mode testnet tetap
+            # requirements.txt; impor lazy supaya mode paper tetap
             # jalan walau paket tidak terpasang.
             from binance_sdk_wallet import Wallet
             from binance_common.configuration import ConfigurationRestAPI
@@ -121,6 +162,33 @@ class BotApp:
 
     # ------------------------------------------------------------------
     def _build_gateway(self):
+        """
+        Pilih gateway sesuai mode.
+
+          paper -> PaperGateway: AKUN DEMO. Harga/volume/order book nyata dari
+                   endpoint market data publik Binance (tanpa API key), tetapi
+                   saldo dan order sepenuhnya virtual. Tidak ada jalur kode
+                   apa pun yang bisa mengirim order sungguhan di mode ini.
+          live  -> BinanceGateway: order SUNGGUHAN dengan API key.
+        """
+        if self.cfg.mode == "paper":
+            from bot.exchange.paper_gateway import PaperGateway
+            gw = PaperGateway(
+                quote_asset=self.cfg.quote_asset,
+                start_balance=self.cfg.paper.start_balance,
+                fee_pct=self.cfg.risk.fee_pct,
+                slippage_bps=self.cfg.paper.slippage_bps,
+                sl_limit_buffer_pct=self.cfg.execution.oco_sl_limit_buffer_pct,
+                depth_levels=self.cfg.data.depth_levels,
+                state_store=_PaperStateStore(self.db,
+                                             self.cfg.paper.reset_on_start),
+            )
+            logger.info(
+                "MODE PAPER (akun demo): data pasar Binance REAL, dana "
+                "VIRTUAL %.2f %s. Tidak ada API key yang dipakai.",
+                gw.balance_quote, self.cfg.quote_asset)
+            return gw
+
         from bot.exchange.binance_gateway import BinanceGateway
         return BinanceGateway(
             mode=self.cfg.mode,
@@ -188,6 +256,10 @@ class BotApp:
                     exit_mode=r["exit_mode"] or "oco",
                 )
                 self.executor.positions[pos.trade_id] = pos
+                # Mode paper dilewati: buku order akun demo hidup di memori,
+                # jadi setelah restart tidak ada order tersisa untuk dibatalkan
+                # (aset base yang tadinya terkunci OCO sudah dibebaskan saat
+                # state dimuat). OCO-nya tetap dipasang ulang di bawah.
                 if self.mode != "paper" and pos.exit_mode == "oco":
                     # Order lama di exchange tidak punya ID tersimpan ->
                     # batalkan SEMUA order terbuka simbol ini lalu pasang ulang.
@@ -232,7 +304,7 @@ class BotApp:
     # ==================================================================
     async def run(self) -> None:
         logger.info("=" * 60)
-        logger.info(f"PumpBot mulai — mode={self.mode.upper()} "
+        logger.info(f"PumpBot mulai - mode={self.mode.upper()} "
                     f"quote={self.cfg.quote_asset}")
         logger.info("=" * 60)
         notify(f"🚀 PumpBot mulai (mode {self.mode.upper()})")
@@ -361,8 +433,8 @@ class BotApp:
             while True:
                 await asyncio.sleep(self.cfg.universe.refresh_minutes * 60)
                 try:
-                    if self.mode == "paper":
-                        continue  # universe simulator tetap
+                    # Akun demo memakai universe Binance yang sama dengan live,
+                    # jadi watchlist ikut di-refresh seperti biasa.
                     new_symbols = await self.collector.refresh_watchlist()
                     if new_symbols:
                         logger.info(f"Watchlist bertambah: {new_symbols}")
@@ -389,6 +461,16 @@ class BotApp:
         """Shutdown rapi. Posisi & OCO di exchange TETAP hidup (dipulihkan
         saat bot dinyalakan lagi)."""
         logger.info("Mematikan bot...")
+        # Job backtest jalan sebagai proses terpisah di sesi sendiri, jadi ia
+        # tidak ikut menerima sinyal yang dikirim ke grup proses bot. Kalau
+        # tidak dimatikan di sini, grid search akan terus memakan CPU sebagai
+        # proses yatim setelah bot berhenti.
+        bt = getattr(self, "backtest", None)
+        if bt is not None:
+            try:
+                await bt.shutdown()
+            except Exception as exc:
+                logger.debug(f"stop backtest: {exc}")
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)

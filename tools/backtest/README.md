@@ -10,6 +10,12 @@ Semua logika exit memakai fungsi murni milik bot
 Tools ini **tidak memakai API key** dan **tidak memakai BinanceGateway**.
 Hanya endpoint market data publik.
 
+> **Lebih suka tanpa terminal?** Seluruh alur di halaman ini tersedia lewat
+> panel **Backtest & Optimasi** di dashboard web, lengkap dengan unduh data
+> otomatis, progress bar, tabel peringkat, dan tombol untuk menulis hasil ke
+> `config/config.yaml`. Lihat [README utama](../../README.md#backtest--optimasi-dari-dashboard).
+> Jembatannya adalah `tools/backtest/service.py`, dijelaskan di bagian 7.
+
 ## 1. Unduh data
 
 ```bash
@@ -270,3 +276,39 @@ pytest -q
 
 Seluruh test backtest berjalan tanpa jaringan; downloader diuji dengan HTTP
 palsu (`urllib` di-patch).
+
+## 7. `service.py`: penggerak panel dashboard
+
+`tools/backtest/service.py` adalah pembungkus yang dipakai dashboard. Ia
+menjalankan alur yang sama dengan `optimize`, tetapi melaporkan kemajuannya
+sebagai **NDJSON** (satu objek JSON per baris) di stdout supaya bisa
+ditampilkan sebagai progress bar.
+
+```bash
+# job dibaca dari stdin sebagai satu objek JSON
+echo '{"symbols":["BTCUSDT"],"days":7,"sl":[1.0,1.5],"tp":[2.0,3.0]}' \
+  | python -u -m tools.backtest.service --job -
+```
+
+Jenis baris yang dikeluarkan:
+
+| Tipe | Isi |
+|---|---|
+| `plan` | jumlah kombinasi sinyal, kombinasi exit, total baris, daftar simbol |
+| `phase` | fase yang mulai berjalan: `persiapan`, `unduh`, `muat`, `scan`, `grid`, `oos`, `selesai` |
+| `progress` | `current` dari `total` untuk fase berjalan |
+| `log` | pesan teks untuk panel log |
+| `done` | seluruh baris hasil, path CSV, dan metadata ringkasan |
+| `error` | pesan kegagalan |
+
+Tiga fase inti:
+
+1. **Scan entry.** Sinyal dipindai sekali per kombinasi parameter entry, hasilnya
+   dipakai ulang oleh semua kombinasi exit. Inilah alasan menambah nilai SL atau
+   TP jauh lebih murah daripada menambah nilai threshold.
+2. **Grid exit.** Setiap kombinasi exit disimulasikan pada daftar sinyal tadi.
+3. **Uji out-of-sample.** Hanya peringkat teratas yang diuji ulang pada potongan
+   data terakhir.
+
+Setiap baris hasil membawa cuplikan `yaml` siap tempel dan objek `apply` berisi
+nilai per grup config, yang dipakai tombol *Terapkan ke config* di dashboard.

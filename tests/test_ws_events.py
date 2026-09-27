@@ -3,12 +3,12 @@ Test regresi nama EVENT WebSocket SDK binance-sdk-spot.
 
 Bug nyata: gateway mendaftar event koneksi "reconnected" dan "closed",
 padahal SDK hanya menerima {'ping', 'open', 'reconnect', 'pong', 'close',
-'error'} -> ValueError saat startup di mode testnet/live (bot mati
+'error'} -> ValueError saat startup di mode paper/live (bot mati
 sebelum sempat berlangganan stream).
 
 Test ini memvalidasi SEMUA nama event yang dipakai gateway (baik level
 koneksi maupun level stream) terhadap daftar yang didukung SDK yang
-SEDANG TERPASANG — jadi kalau versi SDK berubah daftar eventnya,
+SEDANG TERPASANG - jadi kalau versi SDK berubah daftar eventnya,
 test ini langsung memberi tahu sebelum bot crash di lapangan.
 """
 

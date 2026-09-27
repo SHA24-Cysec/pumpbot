@@ -1,1 +1,1 @@
-"""Paket exchange: akses ke Binance (via SDK resmi) atau simulator paper trading."""
+"""Paket exchange: akses Binance live (SDK resmi) atau akun demo paper trading."""

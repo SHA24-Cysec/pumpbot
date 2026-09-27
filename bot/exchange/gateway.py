@@ -1,8 +1,14 @@
 """
 Abstraksi akses exchange (ExchangeGateway).
 
-Ada dua implementasi:
-  - BinanceGateway    : pakai SDK resmi `binance-sdk-spot` (REST + WebSocket Streams)
+Implementasi yang tersedia:
+  - BinanceGateway   : mode `live`. SDK resmi `binance-sdk-spot`
+    (REST + WebSocket Streams) dengan API key; mengirim order SUNGGUHAN.
+  - PaperGateway     : mode `paper` (AKUN DEMO). Data pasar nyata dari
+    endpoint market data publik Binance tanpa API key, tetapi saldo, order,
+    dan posisi sepenuhnya virtual.
+  - SimulatedGateway : simulator pasar offline; dipakai unit test end-to-end,
+    bukan mode operasi bot.
 
 Dengan interface yang sama, seluruh bot (collector, executor, position manager)
 tidak perlu tahu sedang jalan di mode apa - memudahkan pengujian tanpa risiko.
@@ -27,7 +33,7 @@ OnTicker = Callable[[str, Ticker24h], None]
 class ExchangeGateway(ABC):
     """Kontrak yang harus dipenuhi setiap implementasi exchange."""
 
-    mode: str = ""   # "testnet" | "live"
+    mode: str = ""   # "paper" (akun demo) | "live" (uang sungguhan)
 
     # -------------------------------------------------------------- lifecycle
     @abstractmethod

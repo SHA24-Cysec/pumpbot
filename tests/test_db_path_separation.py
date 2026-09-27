@@ -18,16 +18,21 @@ _CONFIG = os.path.join(_ROOT, "config", "config.yaml")
 
 
 class TestResolveDbPath:
-    def test_default_testnet(self):
-        assert resolve_db_path("testnet", "data/pumpbot.db") == \
-            "data/pumpbot-testnet.db"
+    def test_default_paper(self):
+        assert resolve_db_path("paper", "data/pumpbot.db") == \
+            "data/pumpbot-paper.db"
 
     def test_default_live(self):
         assert resolve_db_path("live", "data/pumpbot.db") == \
             "data/pumpbot-live.db"
 
+    def test_paper_dan_live_tidak_berbagi_file(self):
+        """Histori akun demo tidak boleh mengotori statistik akun live."""
+        assert resolve_db_path("paper", "data/pumpbot.db") != \
+            resolve_db_path("live", "data/pumpbot.db")
+
     def test_path_custom_tidak_diubah(self):
-        for mode in ("testnet", "live"):
+        for mode in ("paper", "live"):
             assert resolve_db_path(mode, "data/custom.db") == "data/custom.db"
             assert resolve_db_path(mode, "data/pumpbot-live.db") == \
                 "data/pumpbot-live.db"
@@ -38,10 +43,10 @@ class TestResolveDbPath:
 
 
 class TestSingleConfigIntegration:
-    def test_config_satu_satunya_memulai_live_dengan_db_terpisah(self):
+    def test_config_satu_satunya_memulai_paper_dengan_db_terpisah(self):
         cfg = load_config(_CONFIG)
-        assert cfg.mode == "live"
-        assert cfg.database.path == "data/pumpbot-live.db"
+        assert cfg.mode == "paper"
+        assert cfg.database.path == "data/pumpbot-paper.db"
 
 
 if __name__ == "__main__":

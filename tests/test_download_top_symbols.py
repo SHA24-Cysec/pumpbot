@@ -72,11 +72,11 @@ class _FakeRestAPI:
         for s in symbols:
             if s not in self._ticker_rows:
                 continue
-            # bentuk MODEL (jalur normal SDK) — utk setiap simbol
+            # bentuk MODEL (jalur normal SDK) utk setiap simbol
             rows.append(_FakeTickerModel(
                 symbol=s, quoteVolume=str(self._ticker_rows[s]),
                 lastPrice="1.0", closeTime=1700000000000))
-        # selipkan baris raw list (format tak terduga) — harus di-skip
+        # selipkan baris raw list (format tak terduga), harus di-skip
         rows.append(["BTCUSDT", "1", "2"])
         return _FakeApiResponse(rows)
 

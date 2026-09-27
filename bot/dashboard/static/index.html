@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PumpBot — Dashboard Trading</title>
+<title>PumpBot - Dashboard Trading</title>
 <style>
   :root{
     --bg:#0b0e14; --panel:#121826; --panel2:#0e1420; --line:#1e2735;
@@ -24,9 +24,9 @@
           border-radius:10px;margin-bottom:14px;min-width:0}
   .header>span{min-width:0}
   .badge{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700}
-  .badge.testnet{background:#1e3a8a;color:#93c5fd}
-  .badge.live{background:#7f1d1d;color:#fca5a5}
+  /* hijau = akun demo (dana virtual), merah = uang sungguhan */
   .badge.paper{background:#14532d;color:#86efac}
+  .badge.live{background:#7f1d1d;color:#fca5a5}
   .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px}
   .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
   .dot.off{background:var(--red)}
@@ -36,6 +36,9 @@
   button:hover{border-color:var(--blue)}
   button.danger{border-color:#7f1d1d;color:#fca5a5}
   button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  button.accent{background:rgba(167,139,250,.14);border-color:var(--purple);
+                color:#ddd0ff;font-weight:600}
+  button.accent:hover{background:rgba(167,139,250,.26);border-color:#c4b5fd}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr));
          gap:clamp(8px,1vw,10px);margin-bottom:14px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -118,6 +121,81 @@
     .sigrow{grid-template-columns:1fr 68px;align-items:center}
     .sigrow .scorebar{grid-column:1 / -1}
   }
+
+  /* ================= BACKTEST & OPTIMASI ================= */
+  #btPanel{border-color:var(--purple);
+           box-shadow:0 0 0 1px rgba(167,139,250,.18), 0 6px 22px rgba(167,139,250,.07)}
+  #btPanel.sorot{animation:btSorot 1.5s ease-out 2}
+  @keyframes btSorot{
+    0%,100%{box-shadow:0 0 0 1px rgba(167,139,250,.18), 0 6px 22px rgba(167,139,250,.07)}
+    50%    {box-shadow:0 0 0 3px rgba(167,139,250,.55), 0 6px 30px rgba(167,139,250,.30)}
+  }
+  #btPanel .bt-head h2{color:#c4b5fd}
+  .bt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;
+           user-select:none}
+  .bt-head h2{margin:0}
+  .bt-caret{color:var(--muted);font-size:12px;transition:transform .15s}
+  .bt-open .bt-caret{transform:rotate(90deg)}
+  .bt-body{display:none;margin-top:12px}
+  .bt-open .bt-body{display:block}
+  .bt-note{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--blue);
+           border-radius:8px;padding:9px 12px;font-size:12px;color:var(--muted);
+           margin-bottom:12px;white-space:normal}
+  .bt-note.warn{border-left-color:var(--amber);color:#fcd34d}
+  .bt-note.stop{border-left-color:var(--red);color:#fca5a5}
+  .bt-note b{color:var(--text)}
+  .bt-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));
+           gap:12px;margin-bottom:12px}
+  .bt-group{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+            padding:10px 12px;min-width:0}
+  .bt-group h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;
+               color:var(--muted);margin-bottom:8px;font-weight:700}
+  .bt-f{display:flex;align-items:center;justify-content:space-between;gap:8px;
+        padding:4px 0;font-size:12.5px;min-width:0}
+  .bt-f label{color:var(--muted);flex:0 0 auto;white-space:nowrap}
+  .bt-f input,.bt-f select{width:118px;max-width:55%;background:var(--panel);
+        border:1px solid var(--line);color:var(--text);padding:4px 7px;
+        border-radius:6px;font-size:12.5px;font-variant-numeric:tabular-nums}
+  .bt-f input[type=checkbox]{width:auto;max-width:none}
+  .bt-f input.wide{width:100%;max-width:none}
+  .bt-f.col{flex-direction:column;align-items:stretch;gap:4px}
+  .bt-f.col label{white-space:normal}
+  .bt-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .bt-est{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .bt-est b{color:var(--text)}
+  .bt-est.over{color:#fca5a5}
+  .bt-prog{margin-bottom:10px}
+  .bt-bar{height:10px;background:var(--panel2);border:1px solid var(--line);
+          border-radius:6px;overflow:hidden}
+  .bt-bar>div{height:100%;width:0;background:var(--blue);transition:width .25s}
+  .bt-bar.done>div{background:var(--green)}
+  .bt-bar.err>div{background:var(--red)}
+  .bt-meta{display:flex;justify-content:space-between;gap:10px;font-size:11.5px;
+           color:var(--muted);margin-top:4px;flex-wrap:wrap}
+  .bt-log{max-height:190px;overflow:auto;background:var(--panel2);
+          border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+          font:11.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+          white-space:pre-wrap;word-break:break-word;margin-bottom:12px}
+  .bt-log .e{color:#fca5a5}
+  .bt-log .w{color:#fcd34d}
+  .bt-res tbody tr{cursor:pointer}
+  .bt-res tbody tr.sel td{background:#1e3a8a33;box-shadow:inset 2px 0 0 var(--blue)}
+  .bt-res .oos{border-left:2px solid var(--line)}
+  .bt-res td.neg,.bt-res td.pos{font-weight:600}
+  .bt-apply{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+            padding:10px 12px;margin-top:12px}
+  .bt-chk{display:flex;align-items:flex-start;gap:8px;padding:5px 0;font-size:12.5px}
+  .bt-chk input{margin-top:3px}
+  .bt-chk .d{color:var(--muted);font-size:11.5px;display:block}
+  .bt-yaml{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+           padding:10px 12px;margin-top:10px;
+           font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+           white-space:pre;overflow:auto;max-height:240px;color:var(--muted)}
+  @media(max-width:760px){
+    .bt-f{flex-direction:column;align-items:stretch}
+    .bt-f input,.bt-f select{width:100%;max-width:none}
+    .bt-log{max-height:150px}
+  }
 </style>
 </head>
 <body>
@@ -125,32 +203,213 @@
 <!-- ================= HEADER ================= -->
 <div class="header">
   <h1>🤖 PumpBot</h1>
-  <span class="badge" id="mode">—</span>
+  <span class="badge" id="mode">-</span>
   <span><span class="dot off" id="wsdot"></span><span id="wstxt" class="mut">menghubungkan…</span></span>
   <span class="mut" id="uptime"></span>
   <span class="mut" id="watch"></span>
   <span style="flex:1"></span>
+  <button id="btnGoBt" class="accent" title="Cari kombinasi SL/TP/BE/trailing terbaik dari data historis">🔬 Backtest &amp; Optimasi</button>
+  <!-- UI-BUILD: backtest-2 -->
   <button id="btnPause" class="primary">⏸ Pause Bot</button>
 </div>
 
 <!-- ================= KARTU RINGKASAN ================= -->
 <div class="cards">
   <div class="card"><div class="lbl">Total Modal (Equity)</div>
-    <div class="val" id="equity">—</div><div class="sub" id="ret"></div></div>
+    <div class="val" id="equity">-</div><div class="sub" id="ret"></div></div>
   <div class="card"><div class="lbl">Saldo Tersedia</div>
-    <div class="val" id="free">—</div><div class="sub" id="locked"></div></div>
+    <div class="val" id="free">-</div><div class="sub" id="locked"></div></div>
   <div class="card"><div class="lbl">Terkunci di Posisi</div>
-    <div class="val" id="inpos">—</div><div class="sub" id="npos"></div></div>
+    <div class="val" id="inpos">-</div><div class="sub" id="npos"></div></div>
   <div class="card"><div class="lbl">PnL Hari Ini</div>
-    <div class="val" id="daily">—</div><div class="sub" id="dailylim"></div></div>
+    <div class="val" id="daily">-</div><div class="sub" id="dailylim"></div></div>
   <div class="card"><div class="lbl">Win Rate</div>
-    <div class="val" id="winrate">—</div><div class="sub" id="trades"></div></div>
+    <div class="val" id="winrate">-</div><div class="sub" id="trades"></div></div>
   <div class="card"><div class="lbl">Profit Factor</div>
-    <div class="val" id="pf">—</div><div class="sub" id="exp"></div></div>
+    <div class="val" id="pf">-</div><div class="sub" id="exp"></div></div>
   <div class="card"><div class="lbl">Total PnL</div>
-    <div class="val" id="totalpnl">—</div><div class="sub" id="best"></div></div>
+    <div class="val" id="totalpnl">-</div><div class="sub" id="best"></div></div>
   <div class="card"><div class="lbl">Max Drawdown</div>
-    <div class="val" id="mdd">—</div><div class="sub">dari equity curve</div></div>
+    <div class="val" id="mdd">-</div><div class="sub">dari equity curve</div></div>
+</div>
+
+<!-- ================= BACKTEST & OPTIMASI PARAMETER ================= -->
+<div class="panel bt-open" id="btPanel">
+  <div class="bt-head" id="btToggle">
+    <span class="bt-caret">▶</span>
+    <h2 style="margin:0">Backtest &amp; Optimasi Parameter</h2>
+    <span class="mut" id="btStatus" style="font-size:12px;text-transform:none">belum pernah dijalankan</span>
+  </div>
+
+  <div class="bt-body">
+    <div class="bt-note" id="btPauseNote">
+      <b>Bot harus di-pause dulu.</b> Grid search memakai CPU penuh selama
+      beberapa menit. Selama backtest berjalan, bot tidak boleh berebut
+      sumber daya dengan pengawasan posisi yang sedang hidup.
+    </div>
+    <div class="bt-note">
+      Data candle diambil langsung dari endpoint publik Binance
+      (<b>data-api.binance.vision</b>) tanpa API key, lalu disimpan sebagai
+      cache CSV di <b>data/backtest/</b>. Menjalankan ulang dengan periode
+      sama hanya menambal bagian yang belum ada.
+    </div>
+
+    <div class="bt-cols">
+      <div class="bt-group">
+        <h3>Sumber data</h3>
+        <div class="bt-f col"><label>Simbol (kosongkan = otomatis volume tertinggi)</label>
+          <input class="wide" id="bt_symbols" placeholder="BTCUSDT, ETHUSDT, SOLUSDT"></div>
+        <div class="bt-f"><label>Jumlah simbol otomatis</label>
+          <input type="number" id="bt_top" value="10" min="1" max="60" step="1"></div>
+        <div class="bt-f"><label>Panjang data (hari)</label>
+          <input type="number" id="bt_days" value="14" min="1" max="180" step="1"></div>
+        <div class="bt-f"><label>Interval candle</label>
+          <select id="bt_interval"><option value="1m">1m</option><option value="5m">5m</option></select></div>
+        <div class="bt-f"><label>Unduh data otomatis</label>
+          <input type="checkbox" id="bt_download" checked></div>
+      </div>
+
+      <div class="bt-group">
+        <h3>Cara menilai</h3>
+        <div class="bt-f"><label>Porsi out of sample</label>
+          <input type="number" id="bt_oos" value="0.3" min="0" max="0.9" step="0.05"></div>
+        <div class="bt-f"><label>Proses paralel</label>
+          <input type="number" id="bt_workers" value="2" min="1" max="32" step="1"></div>
+        <div class="bt-f"><label>Minimal trade</label>
+          <input type="number" id="bt_min_trades" value="30" min="0" step="1"></div>
+        <div class="bt-f"><label>Modal simulasi</label>
+          <input type="number" id="bt_equity" value="1000" min="1" step="100"></div>
+        <div class="bt-f"><label>Baris hasil ditampilkan</label>
+          <input type="number" id="bt_top_rows" value="15" min="1" max="200" step="1"></div>
+        <div class="bt-f"><label>Filter Anchored VWAP</label>
+          <select id="bt_vwap"><option value="config">ikut config</option>
+            <option value="on">paksa aktif</option><option value="off">paksa mati</option></select></div>
+      </div>
+
+      <div class="bt-group">
+        <h3>Grid parameter exit</h3>
+        <div class="bt-f col"><label>Stop loss persen</label>
+          <input class="wide" id="bt_sl" value="0.5,0.75,1.0,1.5,2.0,3.0"></div>
+        <div class="bt-f col"><label>Take profit (kelipatan risiko)</label>
+          <input class="wide" id="bt_tp" value="1.0,1.5,2.0,3.0,4.0"></div>
+        <div class="bt-f col"><label>Breakeven (kelipatan risiko, 0 = mati)</label>
+          <input class="wide" id="bt_be" value="0,0.5,0.75,1.0"></div>
+        <div class="bt-f col"><label>Buffer breakeven persen</label>
+          <input class="wide" id="bt_be_buffer" value="0.2,0.3,0.5"></div>
+        <div class="bt-f col"><label>Trailing persen (0 = mati)</label>
+          <input class="wide" id="bt_trail" value="0,0.3,0.5,0.75,1.0"></div>
+        <div class="bt-f col"><label>Cooldown menit (kosong = ikut config)</label>
+          <input class="wide" id="bt_cooldown" placeholder="15,30"></div>
+      </div>
+
+      <div class="bt-group">
+        <h3>Grid parameter sinyal</h3>
+        <div class="bt-f col"><label>Skor minimum entry</label>
+          <input class="wide" id="bt_thr" value="40,50,60"></div>
+        <div class="bt-f col"><label>Rasio bobot price action (0 sampai 1)</label>
+          <input class="wide" id="bt_wpa" value="0.6"></div>
+        <div class="bt-f col"><label>MA volume (kosong = ikut config)</label>
+          <input class="wide" id="bt_ma_period" placeholder="ikut config"></div>
+        <div class="bt-f col"><label>Skala lonjakan volume</label>
+          <input class="wide" id="bt_spike_scale" placeholder="ikut config"></div>
+        <div class="bt-f col"><label>Candle struktur / breakout / swing</label>
+          <div style="display:flex;gap:6px">
+            <input id="bt_structure" placeholder="struktur" style="width:100%;max-width:none">
+            <input id="bt_breakout" placeholder="breakout" style="width:100%;max-width:none">
+            <input id="bt_swing" placeholder="swing" style="width:100%;max-width:none">
+          </div></div>
+        <div class="bt-f col"><label>Minimal candle sebelum dinilai</label>
+          <input class="wide" id="bt_min_candles" placeholder="ikut config"></div>
+      </div>
+
+      <div class="bt-group">
+        <h3>Bobot skor peringkat</h3>
+        <div class="bt-f"><label>Bobot imbal hasil</label>
+          <input type="number" id="bt_w_pnl" value="0.4" min="0" max="1" step="0.05"></div>
+        <div class="bt-f"><label>Bobot profit factor</label>
+          <input type="number" id="bt_w_pf" value="0.3" min="0" max="1" step="0.05"></div>
+        <div class="bt-f"><label>Bobot drawdown kecil</label>
+          <input type="number" id="bt_w_dd" value="0.3" min="0" max="1" step="0.05"></div>
+        <div class="hint">Skor akhir menormalkan ketiga metrik lalu
+          menjumlahkannya sesuai bobot. Drawdown dihitung terbalik:
+          makin kecil makin bagus.</div>
+      </div>
+    </div>
+
+    <div class="bt-actions">
+      <button id="btRun" class="primary">▶ Jalankan Backtest</button>
+      <button id="btStop" class="danger" style="display:none">■ Batalkan</button>
+      <button id="btReset">↺ Kembalikan Nilai Awal</button>
+      <span class="bt-est" id="btEst"></span>
+    </div>
+
+    <div class="bt-prog" id="btProg" style="display:none">
+      <div class="bt-bar" id="btBarWrap"><div id="btBar"></div></div>
+      <div class="bt-meta">
+        <span id="btPhase">-</span>
+        <span id="btElapsed"></span>
+      </div>
+    </div>
+
+    <div class="bt-log" id="btLog" style="display:none"></div>
+    <div class="bt-note stop" id="btError" style="display:none"></div>
+
+    <div id="btResults" style="display:none">
+      <h2 style="margin-top:4px">Hasil Peringkat
+        <span class="mut" style="text-transform:none" id="btResMeta"></span></h2>
+      <div class="scroll" style="max-height:min(420px,50vh)">
+        <table class="bt-res">
+          <thead><tr>
+            <th>#</th><th>THR</th><th>WPA</th><th>SL%</th><th>TP</th><th>BE</th>
+            <th>BUF</th><th>TR%</th><th>CD</th>
+            <th>N</th><th>WIN%</th><th>RET%</th><th>PF</th><th>MDD%</th><th>SKOR</th>
+            <th class="oos">N</th><th class="oos">RET%</th>
+            <th class="oos">PF</th><th class="oos">MDD%</th>
+          </tr></thead>
+          <tbody id="btRows"></tbody>
+        </table>
+      </div>
+      <div class="hint">Kolom setelah garis pemisah adalah hasil
+        <b>out of sample</b>, yaitu bagian akhir data yang tidak ikut dioptimasi.
+        Kombinasi yang bagus di kiri tetapi negatif di kanan berarti
+        <b>overfitting</b>. Klik satu baris untuk memilihnya.</div>
+
+      <div class="bt-apply">
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.8px;
+                   color:var(--muted);margin-bottom:8px">
+          Terapkan baris terpilih ke config.yaml</h3>
+        <label class="bt-chk"><input type="checkbox" id="bt_g_exit" checked>
+          <span><b>Parameter exit</b>
+            <span class="d">Stop loss, take profit, breakeven, trailing.
+              Inilah hasil utama optimizer dan yang paling aman diterapkan.</span></span></label>
+        <label class="bt-chk"><input type="checkbox" id="bt_g_lookback">
+          <span><b>Lookback detector</b>
+            <span class="d">MA volume, skala lonjakan, candle struktur, breakout,
+              swing, minimal candle. Berupa jumlah candle sehingga tidak
+              bergantung pada skala skor.</span></span></label>
+        <label class="bt-chk"><input type="checkbox" id="bt_g_cooldown">
+          <span><b>Cooldown setelah exit</b>
+            <span class="d">Hanya tersedia bila cooldown ikut dioptimasi di grid.</span></span></label>
+        <label class="bt-chk"><input type="checkbox" id="bt_g_scoring">
+          <span><b>Skor minimum dan bobot detector</b>
+            <span class="d" style="color:#fcd34d">Hati-hati. Skor entry di backtest
+              hanya proksi candle (price action dan volume saja), sedangkan bot live
+              memakai lima detector. Angka threshold dari sini tidak sebanding dan
+              perlu dikalibrasi ulang.</span></span></label>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button id="btPreview">👁 Pratinjau Perubahan</button>
+          <button id="btApply" class="primary">💾 Tulis ke config.yaml</button>
+          <a id="btCsv" href="/api/backtest/results.csv" download
+             style="text-decoration:none"><button>⬇ Unduh CSV Lengkap</button></a>
+        </div>
+        <div class="bt-note" id="btApplyOut" style="display:none;margin:10px 0 0"></div>
+      </div>
+
+      <div class="bt-yaml" id="btYaml" style="display:none"></div>
+      <div class="bt-note warn" id="btNotOpt" style="display:none"></div>
+    </div>
+  </div>
 </div>
 
 <!-- ================= EQUITY CURVE ================= -->
@@ -221,27 +480,28 @@
 
     <div class="panel">
       <h2>Skor per Detector (teratas)</h2>
-      <div id="det" class="mut" style="font-size:12px">—</div>
+      <div id="det" class="mut" style="font-size:12px">-</div>
     </div>
   </div>
 </div>
+
 
 <div class="toast" id="toast"></div>
 
 <script>
 "use strict";
 /* ============================================================
-   PumpBot Dashboard — vanilla JS, tanpa dependency eksternal.
+   PumpBot Dashboard - vanilla JS, tanpa dependency eksternal.
    Data masuk lewat WebSocket /ws (snapshot penuh tiap detik).
    ============================================================ */
 
 const $ = id => document.getElementById(id);
-const fmt = (v, d=2) => (v===null||v===undefined||isNaN(v)) ? "—" :
+const fmt = (v, d=2) => (v===null||v===undefined||isNaN(v)) ? "-" :
   Number(v).toLocaleString("id-ID",{minimumFractionDigits:d,maximumFractionDigits:d});
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({
   "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;"
 }[c]));
-const pct = (v, d=2) => (v===null||v===undefined||isNaN(v)) ? "—" :
+const pct = (v, d=2) => (v===null||v===undefined||isNaN(v)) ? "-" :
   (v>=0?"+":"") + fmt(v,d) + "%";
 const cls = v => v>0 ? "pos" : (v<0 ? "neg" : "mut");
 const money = v => fmt(v,2);
@@ -251,8 +511,8 @@ const idr = v => {
   return "≈ Rp" + Number(v * rate).toLocaleString("id-ID",{maximumFractionDigits:0});
 };
 const idrWrap = v => idr(v) ? " (" + idr(v) + ")" : "";
-const ts = ms => ms ? new Date(ms).toLocaleTimeString("id-ID") : "—";
-const tsFull = ms => ms ? new Date(ms).toLocaleString("id-ID") : "—";
+const ts = ms => ms ? new Date(ms).toLocaleTimeString("id-ID") : "-";
+const tsFull = ms => ms ? new Date(ms).toLocaleString("id-ID") : "-";
 
 let S = null;          // snapshot terakhir
 let paused = false;
@@ -285,8 +545,12 @@ function render(){
   if(!S) return;
   const b = S.balance, st = S.stats, d = S.daily;
 
-  $("mode").textContent = S.mode;
-  $("mode").className = "badge " + S.mode.toLowerCase();
+  const modeLower = String(S.mode || "").toLowerCase();
+  $("mode").textContent = modeLower === "paper" ? "PAPER · AKUN DEMO" : S.mode;
+  $("mode").title = modeLower === "paper"
+    ? "Harga pasar Binance sungguhan, tetapi seluruh dana bersifat virtual."
+    : "UANG SUNGGUHAN: setiap order dieksekusi di akun Binance Anda.";
+  $("mode").className = "badge " + modeLower;
   $("uptime").textContent = "⏱ " + Math.floor(S.uptime_sec/60) + " m " + (S.uptime_sec%60) + " s";
   $("watch").textContent = "👁 " + (S.watchlist?S.watchlist.length:0) + " simbol dipantau";
 
@@ -315,14 +579,14 @@ function render(){
   $("daily").innerHTML = "<span class='"+cls(d.pnl)+"'>"+(d.pnl>=0?"+":"")+money(d.pnl)+"</span>";
   $("dailylim").textContent = (idr(d.pnl) ? idr(d.pnl) + " · " : "") + (d.enabled
     ? "batas rugi: -" + fmt(d.loss_limit_pct,1) + "% (reset " + (d.reset_timezone||"UTC") + ")" +
-      (d.halted ? " — HALT AKTIF" : "")
+      (d.halted ? " - HALT AKTIF" : "")
     : "batas rugi harian: nonaktif");
   $("dailylim").title = kursInfo;
   $("daily").className = "val " + (d.halted ? "neg" : cls(d.pnl));
 
-  $("winrate").textContent = st.total_trades ? fmt(st.win_rate_pct,1)+"%" : "—";
+  $("winrate").textContent = st.total_trades ? fmt(st.win_rate_pct,1)+"%" : "-";
   $("trades").textContent = st.total_trades + " trade (" + st.wins + "W/" + st.losses + "L)";
-  $("pf").textContent = st.profit_factor===null ? "—" : st.profit_factor;
+  $("pf").textContent = st.profit_factor===null ? "-" : st.profit_factor;
   $("exp").textContent = "expectancy: " + money(st.expectancy) + idrWrap(st.expectancy);
   $("exp").title = kursInfo;
   $("totalpnl").innerHTML = "<span class='"+cls(st.total_pnl)+"'>"+
@@ -350,7 +614,7 @@ function renderHalt(){
       el.id = "haltbanner"; el.className = "halt";
       document.querySelector(".header").after(el);
     }
-    el.textContent = "⛔ " + (S.daily.halt_reason || "Batas rugi harian tercapai — entry baru dihentikan sampai besok.");
+    el.textContent = "⛔ " + (S.daily.halt_reason || "Batas rugi harian tercapai - entry baru dihentikan sampai besok.");
   } else if(el){ el.remove(); }
 }
 
@@ -406,8 +670,8 @@ function renderPositions(){
       "<td>"+money(p.value)+"</td>"+
       "<td>"+p.stop_loss.toPrecision(6)+"</td>"+
       "<td>"+tps+"</td>"+
-      "<td>"+(p.be_triggered?"✅":"—")+"</td>"+
-      "<td>"+(p.trail_active?"✅":"—")+"</td>"+
+      "<td>"+(p.be_triggered?"✅":"-")+"</td>"+
+      "<td>"+(p.trail_active?"✅":"-")+"</td>"+
       "<td class='"+cls(p.unrealized_pnl_pct)+"'>"+pct(p.unrealized_pnl_pct)+"</td>"+
       "<td class='"+cls(p.unrealized_pnl)+"'>"+(p.unrealized_pnl>=0?"+":"")+money(p.unrealized_pnl)+"</td>"+
       "<td class='mut' style='font-size:11px'"+modeTitle+">"+esc(modeText)+"</td>"+
@@ -445,7 +709,7 @@ function renderSignals(){
   const el = $("signals");
   if(!S.signals || !S.signals.length){
     el.innerHTML = "<div class='mut'>menunggu data…</div>";
-    $("det").textContent = "—";
+    $("det").textContent = "-";
     return;
   }
   el.innerHTML = S.signals.map(s => {
@@ -472,7 +736,7 @@ function renderSignals(){
   // rincian detector simbol teratas
   const top = S.signals[0];
   if(top && top.breakdown){
-    $("det").innerHTML = "<b>"+top.symbol+"</b> — " +
+    $("det").innerHTML = "<b>"+top.symbol+"</b> - " +
       Object.entries(top.breakdown)
         .map(([k,v]) => k+"=<b>"+v+"</b>").join(", ");
   }
@@ -533,7 +797,7 @@ function drawCurve(){
 const PARAM_FIELDS = [
   ["risk_per_trade_pct","Risiko per trade (% balance, bebas > 0)","number","step=0.1 min=0.000001"],
   ["allow_multiple_positions","Izinkan multi-posisi","checkbox",""],
-  ["max_open_positions","Maks posisi saat multi aktif (1–3)","number","step=1 min=1 max=3"],
+  ["max_open_positions","Maks posisi saat multi aktif (1-3)","number","step=1 min=1 max=3"],
   ["daily_loss_enabled","Aktifkan batas rugi harian (UTC)","checkbox",""],
   ["daily_loss_limit_pct","Batas rugi harian (%)","number","step=0.5"],
   ["score_threshold","Skor minimum sinyal","number","step=1"],
@@ -590,6 +854,8 @@ function setPauseUI(){
   const btn = $("btnPause");
   btn.textContent = paused ? "▶ Resume Bot" : "⏸ Pause Bot";
   btn.className = paused ? "primary" : "danger";
+  // panel backtest ikut menyesuaikan: tombol jalankan hanya hidup saat pause
+  if(typeof btSyncPause === "function") btSyncPause();
 }
 
 $("btnPause").onclick = async () => {
@@ -613,20 +879,428 @@ function connect(){
       if(typeof msg.paused === "boolean" && msg.paused !== paused){
         paused = msg.paused; setPauseUI();
       }
+      // job backtest bisa dimulai dari tab lain: ikut pantau begitu terdeteksi
+      if(msg.backtest && msg.backtest.running && !BT.timer){
+        $("btPanel").classList.add("bt-open");
+        btPollOn();
+      }
       render();
     }
   };
   ws.onclose = () => {
     $("wsdot").className = "dot off";
-    $("wstxt").textContent = "terputus — mencoba ulang…";
+    $("wstxt").textContent = "terputus - mencoba ulang…";
     setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();
 }
 
+/* ============================================================
+   BACKTEST & OPTIMASI
+   State job hidup di server; halaman ini hanya menarik ringkasannya.
+   Polling dipakai (bukan WebSocket) supaya snapshot bot tetap ringan dan
+   log panjang hanya dikirim bagian barunya saja lewat parameter ?since=.
+   ============================================================ */
+
+const BT = {
+  defaults: null,     // nilai awal dari /api/backtest/defaults
+  logSeq: 0,          // nomor log terakhir yang sudah diterima
+  rows: [],           // baris hasil peringkat
+  sel: 1,             // peringkat yang sedang dipilih
+  timer: null,        // handle polling
+  status: "idle",
+  awal: {}            // salinan nilai formulir untuk tombol reset
+};
+
+const BT_FIELDS = ["symbols","top","days","interval","download","oos","workers",
+  "min_trades","equity","top_rows","vwap","sl","tp","be","be_buffer","trail",
+  "cooldown","thr","wpa","ma_period","spike_scale","structure","breakout",
+  "swing","min_candles","w_pnl","w_pf","w_dd"];
+
+const BT_MAX_SIGNAL = 64;        // sama dengan MAX_SIGNAL_COMBOS di service.py
+const BT_MAX_TOTAL  = 200000;    // sama dengan MAX_TOTAL_ROWS
+
+function btEl(name){ return $("bt_" + name); }
+
+function btVal(name){
+  const el = btEl(name);
+  if(!el) return "";
+  return el.type === "checkbox" ? el.checked : el.value;
+}
+
+/* --------- parsing daftar angka --------- */
+function btNums(text){
+  return String(text ?? "").split(",")
+    .map(s => parseFloat(s.trim()))
+    .filter(v => !isNaN(v));
+}
+
+/* Hitung ukuran grid persis seperti build_grid/build_signal_grid di Python,
+   termasuk pembuangan duplikat fungsional, supaya angka di layar jujur. */
+function btEstimate(){
+  const d = BT.defaults || {};
+  const lo = d.min_stop_pct ?? 0.1, hi = d.max_stop_pct ?? 20;
+
+  const sl  = btNums(btVal("sl")).filter(v => v >= lo && v <= hi);
+  const tp  = btNums(btVal("tp")).filter(v => v > 0);
+  const be  = btNums(btVal("be"));
+  const buf = btNums(btVal("be_buffer"));
+  const tr  = btNums(btVal("trail"));
+  const cd  = btNums(btVal("cooldown"));
+  const cds = cd.length ? cd : [null];
+
+  const seen = new Set();
+  for(const c of cds) for(const a of sl) for(const b of tp)
+    for(const e of be) for(const f of buf) for(const g of tr){
+      let key;
+      if(e <= 0 || e >= b)      key = [a,b,0,0,0,c].join("|");
+      else if(g <= 0)           key = [a,b,e,f,0,c].join("|");
+      else                      key = [a,b,e,f,g,c].join("|");
+      seen.add(key);
+    }
+  const nExit = seen.size;
+
+  const satu = (txt, fallback) => {
+    const v = btNums(txt);
+    return v.length ? v : [fallback ?? 0];
+  };
+  const wpa = btNums(btVal("wpa")).filter(v => v > 0 && v < 1);
+  const nSignal = (wpa.length || 0)
+    * satu(btVal("thr"), d.score_threshold).length
+    * satu(btVal("ma_period"), d.ma_period).length
+    * satu(btVal("spike_scale"), d.spike_scale).length
+    * satu(btVal("structure"), d.structure_candles).length
+    * satu(btVal("breakout"), d.breakout_lookback).length
+    * satu(btVal("swing"), d.swing_neighbors).length
+    * satu(btVal("min_candles"), d.min_candles).length;
+
+  const total = nSignal * nExit;
+  const nSym = String(btVal("symbols")).trim()
+    ? String(btVal("symbols")).split(",").filter(s=>s.trim()).length
+    : Number(btVal("top") || 0);
+
+  const el = $("btEst");
+  let pesan = "<b>" + nSignal + "</b> kombinasi sinyal × <b>" +
+    nExit.toLocaleString("id-ID") + "</b> kombinasi exit = <b>" +
+    total.toLocaleString("id-ID") + "</b> baris, " + nSym + " simbol";
+  let lebih = false;
+  if(nSignal === 0 || nExit === 0){
+    pesan = "Grid kosong. Periksa isian, rasio bobot harus di antara 0 dan 1.";
+    lebih = true;
+  } else if(nSignal > BT_MAX_SIGNAL){
+    pesan += ", melebihi batas " + BT_MAX_SIGNAL + " kombinasi sinyal";
+    lebih = true;
+  } else if(total > BT_MAX_TOTAL){
+    pesan += ", melebihi batas " + BT_MAX_TOTAL.toLocaleString("id-ID") + " baris";
+    lebih = true;
+  } else if(nSignal > 1){
+    pesan += " · tiap kombinasi sinyal memindai ulang semua simbol";
+  }
+  el.innerHTML = pesan;
+  el.className = "bt-est" + (lebih ? " over" : "");
+  return !lebih;
+}
+
+/* --------- sinkron dengan status pause --------- */
+function btSyncPause(){
+  const note = $("btPauseNote"), run = $("btRun");
+  if(!note || !run) return;
+  const jalan = BT.status === "running";
+  if(paused){
+    note.className = "bt-note";
+    note.innerHTML = "<b>Bot sedang di-pause.</b> Backtest boleh dijalankan. " +
+      "Posisi yang sudah terbuka tetap diawasi seperti biasa.";
+  } else {
+    note.className = "bt-note stop";
+    note.innerHTML = "<b>Bot harus di-pause dulu.</b> Grid search memakai CPU " +
+      "penuh selama beberapa menit dan tidak boleh berebut sumber daya dengan " +
+      "bot yang sedang trading. Tekan tombol Pause Bot di bagian atas.";
+  }
+  run.disabled = !paused || jalan;
+  run.title = paused ? "" : "Pause bot dulu";
+  const ap = $("btApply"), pv = $("btPreview");
+  if(ap) ap.disabled = !paused;
+  if(pv) pv.disabled = !paused;
+}
+
+/* --------- polling state --------- */
+function btPollOn(){
+  if(BT.timer) return;
+  BT.timer = setInterval(btPoll, 1000);
+}
+function btPollOff(){
+  if(BT.timer){ clearInterval(BT.timer); BT.timer = null; }
+}
+
+async function btPoll(){
+  const r = await api("/api/backtest/state?since=" + BT.logSeq);
+  if(!r) return;
+  BT.status = r.status;
+  if(typeof r.log_seq === "number") BT.logSeq = r.log_seq;
+
+  const jalan = r.status === "running";
+  $("btStop").style.display = jalan ? "" : "none";
+  btSyncPause();
+
+  const teks = {idle:"belum pernah dijalankan", running:"sedang berjalan",
+    done:"selesai", error:"gagal", cancelled:"dibatalkan"}[r.status] || r.status;
+  $("btStatus").textContent = teks +
+    (r.elapsed_sec ? " · " + r.elapsed_sec + " detik" : "");
+
+  if(r.status !== "idle"){
+    $("btProg").style.display = "";
+    const pct = Number(r.progress?.pct || 0);
+    $("btBar").style.width = pct + "%";
+    $("btBarWrap").className = "bt-bar" +
+      (r.status === "done" ? " done" : (r.status === "error" ? " err" : ""));
+    const det = r.progress?.detail ? " · " + esc(r.progress.detail) : "";
+    $("btPhase").innerHTML = esc(r.phase?.label || "-") + " " + pct.toFixed(1) + "%" + det;
+    $("btElapsed").textContent = (r.elapsed_sec || 0) + " detik berjalan";
+  }
+
+  if(r.logs && r.logs.length){
+    const box = $("btLog");
+    box.style.display = "";
+    const nempel = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    box.insertAdjacentHTML("beforeend", r.logs.map(l => {
+      const k = l.level === "error" ? "e" : (l.level === "warning" ? "w" : "");
+      return "<span class='" + k + "'>" + esc(l.text) + "</span>\n";
+    }).join(""));
+    if(nempel) box.scrollTop = box.scrollHeight;
+  }
+
+  if(r.error){
+    $("btError").style.display = "";
+    $("btError").innerHTML = "<b>Gagal:</b> " + esc(r.error);
+  } else {
+    $("btError").style.display = "none";
+  }
+
+  if(r.rows && r.rows.length && r.rows !== BT.rows){
+    BT.rows = r.rows;
+    btRenderRows(r);
+  }
+
+  if(!jalan) btPollOff();
+}
+
+/* --------- tabel hasil --------- */
+function btNum(v, d=2){
+  return (v === null || v === undefined || isNaN(v)) ? "-" : Number(v).toFixed(d);
+}
+
+function btRenderRows(state){
+  const tb = $("btRows");
+  $("btResults").style.display = "";
+  const m = state.meta || {};
+  $("btResMeta").textContent = m.n_symbols
+    ? "(" + m.n_symbols + " simbol, " + Number(m.n_candles||0).toLocaleString("id-ID") +
+      " candle " + m.interval + ", " + m.total_rows + " kombinasi diuji, " +
+      m.elapsed_sec + " detik)"
+    : "";
+
+  tb.innerHTML = BT.rows.map(r => {
+    const s = r.signal, e = r.exit, i = r.is, o = r.oos;
+    const oosSel = o
+      ? "<td class='oos'>" + o.trades + "</td>" +
+        "<td class='" + cls(o.net_return_pct) + "'>" + btNum(o.net_return_pct) + "</td>" +
+        "<td>" + esc(o.profit_factor_text) + "</td>" +
+        "<td>" + btNum(o.max_dd_pct) + "</td>"
+      : "<td class='oos mut'>-</td><td class='mut'>-</td><td class='mut'>-</td><td class='mut'>-</td>";
+    return "<tr data-rank='" + r.rank + "'" +
+      (r.rank === BT.sel ? " class='sel'" : "") + ">" +
+      "<td>" + r.rank + "</td>" +
+      "<td>" + btNum(s.threshold,0) + "</td>" +
+      "<td>" + btNum(s.w_pa,2) + "</td>" +
+      "<td>" + btNum(e.sl_pct) + "</td>" +
+      "<td>" + btNum(e.tp_rr) + "</td>" +
+      "<td>" + btNum(e.be_rr) + "</td>" +
+      "<td>" + btNum(e.be_buffer_pct) + "</td>" +
+      "<td>" + btNum(e.trail_pct) + "</td>" +
+      "<td>" + (e.cooldown_min === null ? "-" : btNum(e.cooldown_min,0)) + "</td>" +
+      "<td>" + i.trades + "</td>" +
+      "<td>" + btNum(i.win_rate) + "</td>" +
+      "<td class='" + cls(i.net_return_pct) + "'>" + btNum(i.net_return_pct) + "</td>" +
+      "<td>" + esc(i.profit_factor_text) + "</td>" +
+      "<td>" + btNum(i.max_dd_pct) + "</td>" +
+      "<td>" + btNum(r.score,3) + "</td>" + oosSel + "</tr>";
+  }).join("");
+
+  [...tb.querySelectorAll("tr")].forEach(tr => {
+    tr.onclick = () => { BT.sel = Number(tr.dataset.rank); btRenderRows(state); };
+  });
+
+  const pilih = BT.rows.find(r => r.rank === BT.sel) || BT.rows[0];
+  if(pilih){
+    BT.sel = pilih.rank;
+    $("btYaml").style.display = "";
+    $("btYaml").textContent =
+      "# Cuplikan YAML untuk baris peringkat " + pilih.rank + "\n" +
+      "# (tombol di atas menulis nilai ini langsung ke config.yaml)\n\n" +
+      pilih.yaml;
+    const adaCd = pilih.apply && pilih.apply.cooldown &&
+      Object.keys(pilih.apply.cooldown).length > 0;
+    $("bt_g_cooldown").disabled = !adaCd;
+    if(!adaCd) $("bt_g_cooldown").checked = false;
+  }
+  if(m.not_optimized && m.not_optimized.length){
+    $("btNotOpt").style.display = "";
+    $("btNotOpt").innerHTML = "<b>Tidak ikut dioptimasi di sini:</b><br>· " +
+      m.not_optimized.map(esc).join("<br>· ");
+  }
+}
+
+/* --------- aksi --------- */
+$("btToggle").onclick = () => {
+  const p = $("btPanel");
+  p.classList.toggle("bt-open");
+  if(p.classList.contains("bt-open")){ btEstimate(); btPoll(); }
+};
+
+// Tombol pintasan di header: buka panel, gulir ke sana, lalu sorot sebentar
+// supaya tidak tenggelam di antara panel lain.
+$("btnGoBt").onclick = () => {
+  const p = $("btPanel");
+  if(!p.classList.contains("bt-open")){
+    p.classList.add("bt-open");
+    btEstimate();
+    btPoll();
+  }
+  p.scrollIntoView({ behavior: "smooth", block: "start" });
+  p.classList.remove("sorot");
+  void p.offsetWidth;          // paksa reflow supaya animasi bisa diulang
+  p.classList.add("sorot");
+  setTimeout(() => p.classList.remove("sorot"), 3200);
+};
+
+$("btRun").onclick = async () => {
+  if(!btEstimate()){ toast("Perbaiki isian grid dulu", false); return; }
+  const body = {};
+  for(const k of BT_FIELDS){
+    const v = btVal(k);
+    if(v === "" || v === null || v === undefined) continue;
+    body[k] = v;
+  }
+  body.download = btVal("download");
+  ["top","days","workers","min_trades","top_rows"].forEach(k => {
+    if(body[k] !== undefined) body[k] = parseInt(body[k], 10);
+  });
+  ["oos","equity","w_pnl","w_pf","w_dd"].forEach(k => {
+    if(body[k] !== undefined) body[k] = parseFloat(body[k]);
+  });
+
+  $("btLog").innerHTML = "";
+  $("btResults").style.display = "none";
+  $("btError").style.display = "none";
+  BT.logSeq = 0; BT.rows = []; BT.sel = 1;
+
+  const r = await api("/api/backtest/start", body);
+  if(!r) return;
+  if(!r.ok){
+    toast(r.error || "gagal memulai", false);
+    $("btError").style.display = "";
+    $("btError").innerHTML = "<b>Gagal:</b> " + esc(r.error || "");
+    return;
+  }
+  BT.status = "running";
+  toast("Backtest dimulai");
+  btSyncPause();
+  btPollOn();
+  btPoll();
+};
+
+$("btStop").onclick = async () => {
+  const r = await api("/api/backtest/cancel", {});
+  if(r && r.ok) toast("Pembatalan dikirim");
+  btPoll();
+};
+
+$("btReset").onclick = () => {
+  for(const k of BT_FIELDS){
+    const el = btEl(k);
+    if(el && k in BT.awal){
+      if(el.type === "checkbox") el.checked = BT.awal[k];
+      else el.value = BT.awal[k];
+    }
+  }
+  btEstimate();
+  toast("Formulir dikembalikan ke nilai awal");
+};
+
+async function btKirimApply(dryRun){
+  const groups = [];
+  if($("bt_g_exit").checked) groups.push("exit");
+  if($("bt_g_lookback").checked) groups.push("lookback");
+  if($("bt_g_cooldown").checked && !$("bt_g_cooldown").disabled) groups.push("cooldown");
+  if($("bt_g_scoring").checked) groups.push("scoring");
+  if(!groups.length){ toast("Pilih minimal satu kelompok parameter", false); return; }
+
+  if(!dryRun){
+    const daftar = groups.join(", ");
+    if(!confirm("Tulis parameter baris peringkat " + BT.sel + " (" + daftar +
+                ") ke config/config.yaml?\n\nFile lama otomatis dicadangkan " +
+                "ke config/backup/.")) return;
+  }
+
+  const r = await api("/api/backtest/apply",
+                      {rank: BT.sel, groups: groups, dry_run: dryRun});
+  if(!r) return;
+  const box = $("btApplyOut");
+  box.style.display = "";
+  if(!r.ok){
+    box.className = "bt-note stop";
+    box.innerHTML = "<b>Ditolak:</b> " + esc(r.error || "tidak diketahui");
+    toast("Gagal menerapkan", false);
+    return;
+  }
+  const baris = (r.changes || []).map(c =>
+    "· <b>" + esc(c.key) + "</b>: " + esc(String(c.before)) + " → " +
+    esc(String(c.after)) + (c.changed ? "" : " <span class='mut'>(sama)</span>")
+  ).join("<br>");
+  const berubah = (r.changes || []).filter(c => c.changed).length;
+  if(dryRun){
+    box.className = "bt-note";
+    box.innerHTML = "<b>Pratinjau</b> (belum ditulis), " + berubah +
+      " dari " + (r.changes || []).length + " nilai akan berubah:<br>" + baris;
+    toast("Pratinjau siap");
+  } else {
+    box.className = "bt-note warn";
+    box.innerHTML = "<b>Tersimpan.</b> " + berubah + " nilai berubah.<br>" +
+      baris + "<br><br>Cadangan file lama: <b>" + esc(r.backup || "-") +
+      "</b><br>" + esc(r.note || "");
+    toast("config.yaml diperbarui");
+  }
+}
+
+$("btPreview").onclick = () => btKirimApply(true);
+$("btApply").onclick = () => btKirimApply(false);
+
+BT_FIELDS.forEach(k => {
+  const el = btEl(k);
+  if(el) el.addEventListener("input", btEstimate);
+});
+
+async function btInit(){
+  for(const k of BT_FIELDS){
+    const el = btEl(k);
+    if(el) BT.awal[k] = el.type === "checkbox" ? el.checked : el.value;
+  }
+  BT.defaults = await api("/api/backtest/defaults");
+  btEstimate();
+  btSyncPause();
+  const st = await api("/api/backtest/state?since=0");
+  if(st && st.status !== "idle"){
+    $("btPanel").classList.add("bt-open");
+    BT.logSeq = 0;
+    await btPoll();
+    if(st.status === "running") btPollOn();
+  }
+}
+
 window.addEventListener("resize", ()=>{ if(S) drawCurve(); });
 setPauseUI();
 renderParams();
+btInit();
 connect();
 </script>
 </body>

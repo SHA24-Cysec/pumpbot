@@ -2,8 +2,14 @@
 """PumpBot entry point.
 
 PumpBot hanya memakai satu file konfigurasi: ``config/config.yaml``.
-Ubah field ``mode`` di file tersebut menjadi ``paper``, ``testnet``, atau
-``live``. Tidak ada profile YAML maupun override mode dari command line.
+Ubah field ``mode`` di file tersebut menjadi:
+
+    paper -> AKUN DEMO. Harga, volume, dan order book diambil dari pasar
+             Binance SUNGGUHAN lewat endpoint publik (tanpa API key),
+             sedangkan saldo dan order sepenuhnya virtual.
+    live  -> UANG SUNGGUHAN. Butuh API key di .env.
+
+Tidak ada profile YAML maupun override mode dari command line.
 
 Pemakaian:
     python run.py
@@ -23,7 +29,7 @@ def main(argv=None) -> int:
     # pilihan strategi dan mode hanya berasal dari config/config.yaml.
     parser = argparse.ArgumentParser(
         prog="pumpbot",
-        description="PumpBot — konfigurasi tunggal di config/config.yaml",
+        description="PumpBot - konfigurasi tunggal di config/config.yaml",
     )
     parser.parse_args(argv)
     from bot.config import ConfigError, load_config

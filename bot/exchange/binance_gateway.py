@@ -36,9 +36,7 @@ try:
     )
     from binance_common.constants import (
         SPOT_REST_API_PROD_URL,
-        SPOT_REST_API_TESTNET_URL,
         SPOT_WS_STREAMS_PROD_URL,
-        SPOT_WS_STREAMS_TESTNET_URL,
     )
     from binance_common.errors import (
         BadRequestError,
@@ -73,6 +71,20 @@ except ImportError as exc:  # pragma: no cover
     _import_error = exc
     _INTERVAL_MAP = {}
 
+# ---------------------------------------------------------------------------
+# Endpoint MARKET DATA PUBLIK resmi Binance (dipakai mode `paper`/akun demo).
+#
+# Kedua domain di bawah hanya melayani data pasar publik dan TIDAK menerima
+# endpoint bertanda tangan maupun user data stream, sehingga TIDAK memerlukan
+# API key. Sumber: dokumentasi resmi Binance Spot API, halaman
+# "Market Data Only" (developers.binance.com).
+#
+# Konsekuensi keamanan yang disengaja: saat mode paper, bot terhubung ke
+# domain yang secara teknis TIDAK BISA mengeksekusi order sungguhan.
+# ---------------------------------------------------------------------------
+MARKET_DATA_REST_URL = "https://data-api.binance.vision"
+MARKET_DATA_WS_URL = "wss://data-stream.binance.vision"
+
 # Error koneksi aiohttp (dipakai SDK utk WebSocket). Dipakai untuk
 # membedakan "koneksi direset server" (layak diulang) dari error program.
 try:  # pragma: no cover - aiohttp selalu terpasang bersama SDK
@@ -95,7 +107,7 @@ _LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR")
 # Karakter yang diizinkan regex parameter `symbols` endpoint market-data
 # Binance: ^[A-Z0-9_.-]{1,50}$ (tanpa lowercase/karakter non-ASCII).
 # PENTING: ada listing dengan simbol non-ASCII (mis. meme coin CJK
-# "币安人生USDT", "牛来USDT") — sah di exchangeInfo, tetapi SATU simbol
+# "币安人生USDT", "牛来USDT") - sah di exchangeInfo, tetapi SATU simbol
 # seperti itu membuat SELURUH request ticker24hr(symbols=[...]) ditolak
 # HTTP 400 (-1100 "Illegal characters"). Maka simbol harus disaring
 # sebelum dikirim via parameter symbols.
@@ -145,7 +157,17 @@ def _f(v, default=0.0) -> float:
 
 
 class BinanceGateway(ExchangeGateway):
-    """Gateway ke Binance Spot (testnet atau live) via binance-sdk-spot."""
+    """
+    Gateway ke Binance Spot via binance-sdk-spot.
+
+    Dua peran sesuai `mode`:
+      * ``live``  : REST + WS produksi, memakai API key, BISA mengirim order.
+      * ``paper`` : REST + WS market data PUBLIK (data-api / data-stream
+        .binance.vision), TANPA API key. Dipakai PaperGateway sebagai sumber
+        harga; method trading di kelas ini tidak boleh dipanggil pada mode
+        ini karena endpoint bertanda tangan memang tidak tersedia di domain
+        market data.
+    """
 
     def __init__(self, mode: str, api_key: str, api_secret: str,
                  quote_asset: str = "USDT", sl_limit_buffer_pct: float = 0.3,
@@ -155,7 +177,11 @@ class BinanceGateway(ExchangeGateway):
                 f"SDK resmi binance-sdk-spot belum terpasang: {_import_error}. "
                 f"Jalankan: pip install -r requirements.txt"
             )
-        self.mode = mode                      # "testnet" | "live"
+        if mode not in ("paper", "live"):
+            raise ValueError(
+                f"BinanceGateway hanya mendukung mode 'paper' atau 'live' "
+                f"(dapat '{mode}')")
+        self.mode = mode                      # "paper" | "live"
         self.quote_asset = quote_asset
         self._sl_limit_buffer_pct = sl_limit_buffer_pct
         # Kedalaman stream orderbook: dari config data.depth_levels
@@ -167,12 +193,17 @@ class BinanceGateway(ExchangeGateway):
         if mode == "live":
             rest_url, ws_url = SPOT_REST_API_PROD_URL, SPOT_WS_STREAMS_PROD_URL
         else:
-            rest_url, ws_url = SPOT_REST_API_TESTNET_URL, SPOT_WS_STREAMS_TESTNET_URL
+            # Mode paper: domain market data publik, tanpa API key.
+            rest_url, ws_url = MARKET_DATA_REST_URL, MARKET_DATA_WS_URL
         self._rest_base_url = rest_url.rstrip("/")
-        # Kurs IDR untuk dashboard memakai market data publik Binance produksi
-        # agar tetap tersedia saat bot berjalan di testnet. Ini hanya baca data,
-        # bukan endpoint trading dan tidak memakai API key.
-        self._market_rest_base_url = SPOT_REST_API_PROD_URL.rstrip("/")
+        # Kurs IDR untuk dashboard diambil dari market data publik Binance.
+        # Pada mode paper dipakai domain market-data-only yang sama supaya
+        # satu mode hanya bergantung pada satu domain; ini hanya baca data,
+        # bukan endpoint trading, dan tidak memakai API key.
+        self._market_rest_base_url = (
+            SPOT_REST_API_PROD_URL.rstrip("/") if mode == "live"
+            else MARKET_DATA_REST_URL.rstrip("/")
+        )
 
         self._client = Spot(
             config_rest_api=ConfigurationRestAPI(
@@ -280,7 +311,7 @@ class BinanceGateway(ExchangeGateway):
 
         PENTING: endpoint /api/v3/ticker/24hr MEWAJIBKAN parameter symbol
         atau symbols (maks 100 simbol per permintaan) sejak perubahan API
-        Binance — memanggil tanpa parameter adalah jalur lama yang di
+        Binance - memanggil tanpa parameter adalah jalur lama yang di
         production mengembalikan format mentah (array of arrays) dan
         membuat SDK gagal mem-parsing. Maka: ambil daftar simbol dari
         exchangeInfo dulu, lalu query ticker per kelompok 100 simbol.
@@ -288,7 +319,7 @@ class BinanceGateway(ExchangeGateway):
         Kalau jalur terdokumentasi itu ditolak server (mis. WAF/regional
         mengembalikan HTTP 400 seperti yang dialami pada api.binance.com
         dari sebagian jaringan), jatuh ke panggilan tanpa-parameter yang
-        masih ditoleransi testnet.
+        masih ditoleransi sebagian endpoint.
         """
         info = await self._rest(self._client.rest_api.exchange_info)
         symbols = [
@@ -337,17 +368,17 @@ class BinanceGateway(ExchangeGateway):
                 out.extend(_parse(resp))
             if out:
                 return out
-        except Exception as exc:         # noqa: BLE001 — fallback di bawah
+        except Exception as exc:         # noqa: BLE001 - fallback di bawah
             logger.warning(
-                "ticker24hr(symbols=) ditolak (%s) — coba jalur lama "
+                "ticker24hr(symbols=) ditolak (%s) - coba jalur lama "
                 "tanpa parameter", exc)
 
-        # Fallback: tanpa parameter (masih diterima testnet).
+        # Fallback: tanpa parameter (masih diterima sebagian endpoint).
         resp = await self._rest(self._client.rest_api.ticker24hr)
         return _parse(resp)
 
     async def _public_ticker_price(self, symbol: str) -> float:
-        """Ambil harga ticker publik dari Binance REST produksi."""
+        """Ambil harga ticker dari endpoint market data publik Binance."""
         def _fetch() -> float:
             query = urllib.parse.urlencode({"symbol": symbol})
             url = f"{self._market_rest_base_url}/api/v3/ticker/price?{query}"

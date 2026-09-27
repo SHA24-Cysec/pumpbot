@@ -42,7 +42,7 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None,
     """Setup logger aplikasi: output ke console + file rotasi."""
     root = logging.getLogger("pumpbot")
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
-    # jangan teruskan ke root logger — beberapa library (mis. binance_common)
+    # jangan teruskan ke root logger, beberapa library (mis. binance_common)
     # memasang handler di root, sehingga pesan kita tampil DOBEL
     root.propagate = False
     fmt = logging.Formatter(

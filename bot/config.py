@@ -225,12 +225,12 @@ class DashboardCfg:
 @dataclass
 class DatabaseCfg:
     # Path default otomatis DIPISAH PER MODE oleh resolve_db_path()
-    # (data/pumpbot.db -> data/pumpbot-{testnet|live|paper}.db).
+    # (data/pumpbot.db -> data/pumpbot-{paper|live}.db).
     # Tulis path custom di YAML kalau ingin mengatur sendiri.
     path: str = "data/pumpbot.db"
 
 
-# Konstanta path DB default — acuan pemisahan per mode (resolve_db_path).
+# Konstanta path DB default - acuan pemisahan per mode (resolve_db_path).
 DEFAULT_DB_PATH = "data/pumpbot.db"
 
 
@@ -246,7 +246,7 @@ class LoggingCfg:
 class DustSweepCfg:
     """
     Konversi berkala sisa koin kecil (dust) menjadi BNB.
-    Hanya berjalan di mode LIVE (endpoint SAPI tidak ada di testnet).
+    Hanya berjalan di mode LIVE (akun demo tidak punya aset BNB sungguhan).
     """
     enabled: bool = False
     interval_minutes: int = 360     # jeda antar sweep (menit)
@@ -254,8 +254,30 @@ class DustSweepCfg:
 
 
 @dataclass
+class PaperCfg:
+    """
+    Parameter AKUN DEMO (mode `paper`).
+
+    Harga, volume, dan order book diambil dari pasar Binance SUNGGUHAN lewat
+    endpoint publik tanpa API key; hanya saldo dan order yang virtual.
+    """
+    # Modal virtual saat akun demo pertama kali dibuat. Setelah itu saldo
+    # mengikuti hasil trading dan disimpan di database mode paper.
+    start_balance: float = 10_000.0
+    # Slippage taker per sisi, dalam basis point (10 bps = 0,1%). Beli terisi
+    # di atas best ask, jual terisi di bawah best bid, supaya hasil demo tidak
+    # lebih optimistis daripada kenyataan.
+    slippage_bps: float = 2.0
+    # true -> saldo & aset virtual dikosongkan ulang ke start_balance setiap
+    # bot dinyalakan. Berguna untuk mengulang eksperimen dari titik yang sama.
+    reset_on_start: bool = False
+
+
+@dataclass
 class Config:
-    mode: str = "live"
+    # Default sengaja `paper`: menjalankan bot tanpa mengubah apa pun tidak
+    # boleh berisiko menyentuh uang sungguhan.
+    mode: str = "paper"
     quote_asset: str = "USDT"
     universe: UniverseCfg = field(default_factory=UniverseCfg)
     data: DataCfg = field(default_factory=DataCfg)
@@ -270,6 +292,12 @@ class Config:
     database: DatabaseCfg = field(default_factory=DatabaseCfg)
     logging: LoggingCfg = field(default_factory=LoggingCfg)
     dust_sweep: DustSweepCfg = field(default_factory=DustSweepCfg)
+    paper: PaperCfg = field(default_factory=PaperCfg)
+
+    # Jalur file YAML asal, diisi otomatis oleh load_config. BUKAN field YAML:
+    # dashboard memakainya agar tahu file mana yang harus ditulis ulang saat
+    # menerapkan hasil backtest.
+    source_path: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +310,7 @@ _SUBDATACLASS_FIELDS = {
     "breakeven": BreakevenCfg, "trailing": TrailingCfg,
     "execution": ExecutionCfg, "dashboard": DashboardCfg,
     "database": DatabaseCfg, "logging": LoggingCfg,
-    "dust_sweep": DustSweepCfg,
+    "dust_sweep": DustSweepCfg, "paper": PaperCfg,
 }
 
 _NESTED = {
@@ -313,18 +341,18 @@ def _build(cls, data: Optional[dict]):
 
 def resolve_db_path(mode: str, path: str) -> str:
     """
-    Pisahkan file database per mode (testnet/live/paper) supaya histori
-    dan statistik antar mode tidak tercampur — tanpa ini, trade testnet
-    lama tampil di dashboard live dan mengotorkan win rate / PF / MDD.
+    Pisahkan file database per mode (paper/live) supaya histori dan statistik
+    antar mode tidak tercampur - tanpa ini, trade akun demo tampil di
+    dashboard live dan mengotorkan win rate / PF / MDD.
 
     Aturan:
     - Path DEFAULT ("data/pumpbot.db") otomatis menjadi
-      "data/pumpbot-{mode}.db" (testnet / live / paper).
-    - Path custom (mis. "data/demo.db") TIDAK diubah — kendali penuh
+      "data/pumpbot-{mode}.db" (paper / live).
+    - Path custom (mis. "data/demo.db") TIDAK diubah - kendali penuh
       tetap di tangan pengguna.
     - File lama "data/pumpbot.db" TIDAK dipindah/dihapus otomatis.
-      Untuk mempertahankan histori lama bagi testnet, jalankan sekali:
-          mv data/pumpbot.db data/pumpbot-testnet.db
+      Untuk memakai histori lama sebagai akun demo, jalankan sekali:
+          mv data/pumpbot.db data/pumpbot-paper.db
     """
     if os.path.normpath(path) == os.path.normpath(DEFAULT_DB_PATH):
         root, ext = os.path.splitext(path)
@@ -386,9 +414,13 @@ def load_config(path: str) -> Config:
     if os.getenv("LOG_LEVEL"):
         cfg.logging.level = os.getenv("LOG_LEVEL")
 
-    # Pisahkan file DB per mode (testnet/live/paper) — path custom lolos
-    # tanpa diubah. Mode final selalu berasal dari YAML tunggal.
+    # Pisahkan file DB per mode (paper/live) - path custom lolos tanpa
+    # diubah. Mode final selalu berasal dari YAML tunggal.
     cfg.database.path = resolve_db_path(cfg.mode, cfg.database.path)
+
+    # Catat asal file supaya komponen lain (mis. dashboard saat menerapkan
+    # hasil backtest) menulis ke file yang benar, bukan menebak jalur.
+    cfg.source_path = path
 
     errors = validate(cfg)
     if errors:
@@ -405,18 +437,37 @@ def validate(cfg: Config) -> list[str]:
     errors: list[str] = []
 
     # --- mode & aset ---
-    if cfg.mode not in ("testnet", "live"):
-        errors.append(f"mode harus 'testnet' | 'live' (dapat '{cfg.mode}')")
+    if cfg.mode not in ("paper", "live"):
+        errors.append(
+            f"mode harus 'paper' (akun demo) | 'live' (uang sungguhan) "
+            f"(dapat '{cfg.mode}')")
     if not cfg.quote_asset or not cfg.quote_asset.isalpha():
         errors.append("quote_asset harus nama aset yang valid, mis. 'USDT'")
-    if cfg.mode in ("testnet", "live"):
+    # HANYA mode live yang butuh kredensial. Akun demo memakai endpoint
+    # market data publik Binance yang tidak menerima API key sama sekali.
+    if cfg.mode == "live":
         if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_API_SECRET"):
             errors.append(
-                f"mode '{cfg.mode}' membutuhkan BINANCE_API_KEY & BINANCE_API_SECRET di file .env"
+                "mode 'live' membutuhkan BINANCE_API_KEY & BINANCE_API_SECRET di file .env"
             )
 
+    # --- akun demo (paper) ---
+    p = cfg.paper
+    if (isinstance(p.start_balance, bool)
+            or not isinstance(p.start_balance, (int, float))
+            or not math.isfinite(float(p.start_balance))
+            or float(p.start_balance) <= 0):
+        errors.append("paper.start_balance harus angka positif (> 0)")
+    if (isinstance(p.slippage_bps, bool)
+            or not isinstance(p.slippage_bps, (int, float))
+            or not math.isfinite(float(p.slippage_bps))
+            or not 0 <= float(p.slippage_bps) <= 500):
+        errors.append("paper.slippage_bps harus di rentang 0..500 basis point")
+    if not isinstance(p.reset_on_start, bool):
+        errors.append("paper.reset_on_start harus true atau false")
+
     # --- dust sweep ---
-    # (mode != live TIDAK dianggap error — fitur cukup dilewati dengan
+    # (mode != live TIDAK dianggap error - fitur cukup dilewati dengan
     #  warning di main, supaya satu file config bisa dipakai lintas mode)
     if not 30 <= cfg.dust_sweep.interval_minutes <= 10080:
         errors.append("dust_sweep.interval_minutes harus di 30..10080")

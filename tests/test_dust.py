@@ -64,7 +64,7 @@ def _detail(asset, amount, to_btc):
 
 @pytest.fixture()
 def cfg():
-    c = load_config(_CFG)          # mode testnet/live
+    c = load_config(_CFG)          # mode dari config.yaml
     return c
 
 

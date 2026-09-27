@@ -1,5 +1,4 @@
 #_rahasia
-.env
 *.env
 
 # database & log

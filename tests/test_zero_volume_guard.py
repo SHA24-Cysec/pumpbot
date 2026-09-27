@@ -1,7 +1,7 @@
 """
 Regresi: guard pembagian-nol di ManipulationDetector (wash-trading check).
 
-Data riil pair illiquid memuat rentetan candle dengan volume 0 —
+Data riil pair illiquid memuat rentetan candle dengan volume 0,
 fmean(prev20) = 0.0 membuat `vol_spike` membagi dengan nol dan
 meledakkan ZeroDivisionError di tengah grid backtest (dan berpotensi di
 jalur LIVE bot juga). Guard: baseline 0 -> vol_spike netral 1.0.
@@ -23,7 +23,7 @@ from bot.utils import now_ms
 
 
 def _mk_buf(candles_spec):
-    """candles_spec: list of (volume, trades) — harga flat 1.0."""
+    """candles_spec: list of (volume, trades), harga flat 1.0."""
     buf = SymbolBuffer("SEPIUSDT", max_candles=500)
     base = now_ms() // 60_000 * 60_000
     n = len(candles_spec)

@@ -7,12 +7,39 @@
 # ============================================================================
 
 # Mode operasi bot:
-#   testnet -> Binance Spot Testnet (data & order palsu)
-#   live    -> uang sungguhan (hanya setelah testnet stabil)
-mode: testnet
+#   paper -> AKUN DEMO. Harga, volume, dan order book diambil dari pasar
+#            Binance SUNGGUHAN lewat endpoint publik (tanpa API key),
+#            tetapi saldo dan order sepenuhnya virtual. Mulai dari sini.
+#   live  -> UANG SUNGGUHAN. Wajib API key di .env. Hanya setelah hasil
+#            akun demo Anda konsisten selama berminggu-minggu.
+mode: paper
 
 # Mata uang quote yang dipakai trading (semua pair berakhiran USDT)
 quote_asset: USDT
+
+# ----------------------------------------------------------------------------
+# AKUN DEMO (hanya dipakai saat mode: paper)
+# ----------------------------------------------------------------------------
+# Yang NYATA di mode paper : harga, volume, order book, trade, watchlist.
+# Yang VIRTUAL di mode paper: saldo, order, posisi, dan seluruh PnL.
+# Saldo demo tersimpan di data/pumpbot-paper.db, jadi tidak hilang saat
+# bot dimatikan dan dinyalakan lagi.
+# ----------------------------------------------------------------------------
+paper:
+  # Modal virtual saat akun demo pertama kali dibuat. Sesudah itu saldo
+  # mengikuti hasil trading. Isi mendekati modal riil rencana Anda supaya
+  # hasil uji tidak menipu (MIN_NOTIONAL Binance umumnya 5 USDT per order).
+  start_balance: 1000.0
+
+  # Slippage taker per sisi dalam basis point (10 bps = 0,1%).
+  # Beli terisi di atas best ask, jual terisi di bawah best bid, sehingga
+  # hasil demo sedikit lebih pesimistis daripada harga layar.
+  slippage_bps: 2.0
+
+  # true -> saldo dan aset virtual dikosongkan ulang ke start_balance setiap
+  # bot dinyalakan. Berguna untuk mengulang eksperimen dari titik yang sama.
+  # Histori trade di database TIDAK ikut terhapus.
+  reset_on_start: false
 
 # ----------------------------------------------------------------------------
 # UNIVERSE - pemilihan koin yang dipantau
@@ -307,7 +334,10 @@ dashboard:
 # "Upgrade ke PostgreSQL".
 # ----------------------------------------------------------------------------
 database:
-  # default -> otomatis data/pumpbot-live.db (dipisah per mode)
+  # default -> otomatis dipisah per mode:
+  #   mode paper -> data/pumpbot-paper.db
+  #   mode live  -> data/pumpbot-live.db
+  # Isi path sendiri kalau ingin mengatur manual (tidak dipisah otomatis).
   path: data/pumpbot.db
 
 # ----------------------------------------------------------------------------
@@ -325,7 +355,7 @@ logging:
 # Sisa qty pembulatan setelah semua TP terjual (nilainya di bawah
 # MIN_NOTIONAL, tidak bisa dijual biasa) otomatis dikonversi ke BNB
 # lewat endpoint resmi Binance "Convert Dust to BNB" (binance-sdk-wallet).
-# HANYA berjalan di mode LIVE (endpoint SAPI tidak tersedia di testnet).
+# HANYA berjalan di mode LIVE (akun demo tidak punya aset BNB sungguhan).
 # ----------------------------------------------------------------------------
 dust_sweep:
   enabled: true

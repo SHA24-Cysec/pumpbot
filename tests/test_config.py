@@ -53,7 +53,9 @@ def test_revision_defaults_are_safe_and_match_1_to_2_flow():
 
 def test_single_yaml_is_valid_and_loads():
     cfg = load_config(CONFIG)
-    assert cfg.mode == "live"
+    # Default project WAJIB akun demo: menjalankan bot apa adanya tidak boleh
+    # langsung menyentuh uang sungguhan.
+    assert cfg.mode == "paper"
     assert cfg.risk.risk_per_trade_pct == 99.0
     assert cfg.signal.score_threshold == 70
     errs = validate(cfg)
@@ -95,6 +97,52 @@ def test_bad_mode_rejected():
     cfg.mode = "demo"
     errs = validate(cfg)
     assert any("mode" in e for e in errs)
+
+
+def test_mode_testnet_sudah_tidak_didukung():
+    """Testnet dihapus: mode yang sah hanya paper (akun demo) dan live."""
+    cfg = _base_cfg()
+    cfg.mode = "testnet"
+    errs = validate(cfg)
+    assert any("mode" in e for e in errs)
+
+
+def test_mode_paper_tidak_butuh_api_key(monkeypatch):
+    """Akun demo memakai endpoint publik Binance, jadi tanpa kredensial."""
+    cfg = Config(mode="paper")
+    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
+    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+    assert validate(cfg) == []
+
+
+def test_default_config_adalah_paper():
+    """Lupa mengisi mode tidak boleh berarti uang sungguhan."""
+    assert Config().mode == "paper"
+
+
+def test_paper_start_balance_harus_positif():
+    for bad in (0, -100.0, float("nan"), float("inf"), True, "10000"):
+        cfg = _base_cfg()
+        cfg.paper.start_balance = bad
+        errs = validate(cfg)
+        assert any("paper.start_balance" in e for e in errs), bad
+
+
+def test_paper_slippage_dibatasi_wajar():
+    for bad in (-1.0, 501.0, True):
+        cfg = _base_cfg()
+        cfg.paper.slippage_bps = bad
+        errs = validate(cfg)
+        assert any("paper.slippage_bps" in e for e in errs), bad
+    cfg = _base_cfg()
+    cfg.paper.slippage_bps = 0.0          # batas bawah sah (tanpa slippage)
+    assert not any("slippage" in e for e in validate(cfg))
+
+
+def test_paper_reset_on_start_harus_bool():
+    cfg = _base_cfg()
+    cfg.paper.reset_on_start = "ya"
+    assert any("paper.reset_on_start" in e for e in validate(cfg))
 
 
 def test_negative_weight_rejected():

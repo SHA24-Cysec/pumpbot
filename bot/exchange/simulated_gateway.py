@@ -1,10 +1,17 @@
 """
-SimulatedGateway - simulator pasar + paper trading untuk mode `paper`.
+SimulatedGateway - simulator pasar OFFLINE untuk pengujian otomatis.
+
+PENTING - ini BUKAN mode operasi bot.
+  Akun demo yang dipakai `mode: paper` adalah `PaperGateway`
+  (bot/exchange/paper_gateway.py), yang memakai harga pasar Binance
+  SUNGGUHAN. Modul ini memakai harga random-walk sintetis pada simbol
+  fiktif (ALPHAUSDT, BETAUSDT, ...), jadi hasilnya tidak mencerminkan
+  pasar nyata dan tidak boleh dipakai menilai strategi.
 
 Tujuan:
   * Menguji SELURUH pipeline (collector -> signal -> risk -> execution ->
-    dashboard) tanpa API key dan tanpa risiko uang.
-  * Demo cepat: parameter `time_scale` > 1 mempercepat waktu simulasi.
+    dashboard) secara deterministik, tanpa jaringan dan tanpa API key.
+  * Mempercepat skenario uji: parameter `time_scale` > 1 mempercepat waktu.
 
 Simulasi per simbol:
   * Harga random-walk dengan beberapa rezim: NORMAL, PUMP, DUMP.
@@ -576,7 +583,7 @@ class SimulatedGateway(ExchangeGateway):
                     if sim.price <= o["stop"] or sim.price >= o["tp"]:
                         # SL kena (isi di harga stop-limit) atau TP kena.
                         # PENTING: jual hanya sebatas base yang benar-benar
-                        # dimiliki — di exchange nyata, menjual aset yang tidak
+                        # dimiliki - di exchange nyata, menjual aset yang tidak
                         # dimiliki ditolak (insufficient balance). Tanpa clamp
                         # ini, bug executor mana pun akan tampat sebagai kredit
                         # quote hantu (base balance jadi negatif).

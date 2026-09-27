@@ -1,12 +1,12 @@
 """
-Dust sweep — konversi sisa koin kecil (dust) menjadi BNB.
+Dust sweep - konversi sisa koin kecil (dust) menjadi BNB.
 
 Sumber dust di bot ini: sisa qty pembulatan LOT_SIZE setelah seluruh chunk
 TP terjual (umumnya < 0.001 unit, nilainya di bawah MIN_NOTIONAL sehingga
-tidak bisa dijual biasa — lihat executor._finalize_if_done), ditambah dust
+tidak bisa dijual biasa - lihat executor._finalize_if_done), ditambah dust
 lain di akun yang sama dari trading manual sebelumnya.
 
-Cara kerja (HANYA mode live — endpoint SAPI tidak tersedia di testnet):
+Cara kerja (HANYA mode live - endpoint SAPI butuh API key bertanda tangan):
   1. Query daftar aset yang bisa dikonversi ke BNB
      (POST /sapi/v1/asset/dust-btc via binance-sdk-wallet). Binance sudah
      memfilter dengan aturan dust mereka sendiri (saldo di bawah ambang).
@@ -95,8 +95,7 @@ class DustSweeper:
             to_btc = float(d.get("toBTC", 0) or 0)
             if asset in ("BNB", quote) or amount <= 0:
                 continue
-            # aset yang nilainya MASIH BESAR bukan dust bagi kita —
-            # kalau dibiarkan, kita malah mencairkan posisi yang disengaja
+            # aset yang nilainya MASIH BESAR bukan dust bagi kita - # kalau dibiarkan, kita malah mencairkan posisi yang disengaja
             if btc_price > 0 and to_btc * btc_price >= ds.min_value_usd:
                 continue
             targets.append(asset)

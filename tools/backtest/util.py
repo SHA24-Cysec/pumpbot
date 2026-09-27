@@ -13,9 +13,9 @@ from unittest.mock import patch
 from bot.config import Config, load_config
 from bot.models import Candle
 
-# Kunci dummy hanya untuk melewati validasi load_config (mode live/testnet
-# mensyaratkan BINANCE_API_KEY). Backtest TIDAK pernah memakai kunci ini dan
-# tidak pernah menyentuh endpoint berkunci.
+# Kunci dummy hanya untuk melewati validasi load_config bila config sedang
+# di-set mode live (mode paper tidak mensyaratkan API key sama sekali).
+# Backtest TIDAK pernah memakai kunci ini dan tidak menyentuh endpoint berkunci.
 _DUMMY_ENV = {
     "BINANCE_API_KEY": "backtest-dummy-key",
     "BINANCE_API_SECRET": "backtest-dummy-secret",
@@ -26,8 +26,9 @@ def load_backtest_config(path: str = os.path.join("config", "config.yaml")) -> C
     """
     Muat config.yaml tanpa mengubah bot/config.py.
 
-    Validasi bot menolak mode live atau testnet bila API key tidak ada, jadi
-    pemanggilan dibungkus environment dummy sementara.
+    Validasi bot menolak mode live bila API key tidak ada, jadi pemanggilan
+    dibungkus environment dummy sementara. Pada mode paper ini tidak
+    berpengaruh apa pun.
     """
     with patch.dict(os.environ, _DUMMY_ENV):
         return load_config(path)
