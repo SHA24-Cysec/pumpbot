@@ -74,7 +74,10 @@ class DataCollector:
         eligible = [t for t in tickers if not self._is_excluded(t)]
         # urutkan berdasarkan volume 24 jam terbesar
         eligible.sort(key=lambda t: t.quote_volume, reverse=True)
-        chosen = [t.symbol for t in eligible[: u.max_symbols]]
+        # max_symbols: 0 berarti pantau seluruh simbol yang lolos filter.
+        chosen = ([t.symbol for t in eligible]
+                  if u.max_symbols == 0
+                  else [t.symbol for t in eligible[:u.max_symbols]])
         logger.info(
             f"Watchlist otomatis: {len(chosen)} simbol "
             f"(dari {len(tickers)} total, {len(eligible)} lolos filter volume "

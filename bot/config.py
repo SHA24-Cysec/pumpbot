@@ -476,8 +476,12 @@ def validate(cfg: Config) -> list[str]:
 
     # --- universe ---
     u = cfg.universe
-    if u.max_symbols < 1 or u.max_symbols > 200:
-        errors.append("universe.max_symbols harus di rentang 1..200")
+    # 0 berarti semua simbol yang lolos filter universe. Tidak diberi batas
+    # angka di sini; kapasitas nyata tetap ditentukan koneksi WebSocket/API.
+    if (isinstance(u.max_symbols, bool)
+            or not isinstance(u.max_symbols, int)
+            or u.max_symbols < 0):
+        errors.append("universe.max_symbols harus bilangan bulat >= 0 (0 = tanpa batas)")
     if u.min_quote_volume_24h < 0:
         errors.append("universe.min_quote_volume_24h tidak boleh negatif")
     if u.refresh_minutes < 5:

@@ -45,9 +45,10 @@ paper:
 # UNIVERSE - pemilihan koin yang dipantau
 # ----------------------------------------------------------------------------
 universe:
-  # Jumlah koin maksimum yang dipantau sekaligus (batasi beban WebSocket & API).
-  # Diambil dari koin dengan volume 24 jam tertinggi yang lolos filter.
-  max_symbols: 50
+  # Jumlah koin maksimum yang dipantau sekaligus. 0 = semua koin yang
+  # lolos filter di bawah. Nilai positif memilih koin dengan volume 24 jam
+  # tertinggi. Perhatikan batas koneksi WebSocket bila hasilnya sangat banyak.
+  max_symbols: 0
 
   # Volume quote 24 jam minimum (dalam satuan quote, 5_000_000 = 5 juta USDT)
   # supaya tidak memantau koin yang terlalu sepi / mudah dimanipulasi.

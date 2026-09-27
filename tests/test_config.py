@@ -145,6 +145,20 @@ def test_paper_reset_on_start_harus_bool():
     assert any("paper.reset_on_start" in e for e in validate(cfg))
 
 
+def test_unlimited_universe_zero_is_valid():
+    cfg = _base_cfg()
+    cfg.universe.max_symbols = 0
+    assert not any("universe.max_symbols" in e for e in validate(cfg))
+
+
+def test_negative_or_non_integer_universe_limit_rejected():
+    for bad in (-1, 1.5, True, "100"):
+        cfg = _base_cfg()
+        cfg.universe.max_symbols = bad
+        errs = validate(cfg)
+        assert any("universe.max_symbols" in e for e in errs), bad
+
+
 def test_negative_weight_rejected():
     cfg = _base_cfg()
     cfg.signal.weights["volume"] = -0.5
