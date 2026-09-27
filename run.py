@@ -11,6 +11,10 @@ Ubah field ``mode`` di file tersebut menjadi:
 
 Tidak ada profile YAML maupun override mode dari command line.
 
+Bot TIDAK auto-start trading: setelah dijalankan, bot berada dalam kondisi
+PAUSE sampai tombol "Resume Bot" ditekan di dashboard. Posisi lama yang
+dipulihkan dari database tetap dikelola (SL/TP/trailing) selama pause.
+
 Pemakaian:
     python run.py
 """

@@ -86,7 +86,11 @@ class BotApp:
         # saat hasil backtest diterapkan.
         self.cfg_path = cfg.source_path or os.path.join("config", "config.yaml")
         self.mode = cfg.mode
-        self.paused = False
+        # Bot SELALU mulai dalam kondisi PAUSE (tidak auto-start trading).
+        # Entry posisi baru hanya berjalan setelah operator menekan tombol
+        # "Resume Bot" di dashboard. Posisi lama yang dipulihkan dari database
+        # TETAP dikelola (SL/TP/trailing) walau bot pause.
+        self.paused = True
         self.started_at = now_ms()
         self.uvicorn_server = None
         self.idr_rate: float = 0.0
@@ -107,6 +111,9 @@ class BotApp:
 
         # cooldown sinyal dibaca dari database
         self.engine.cooldown_provider = self.db.seconds_since_last_activity
+
+        # sinkronkan status pause awal ke signal engine (tidak auto-start)
+        self.engine.paused = self.paused
 
         self._tasks: list[asyncio.Task] = []
         self._shutdown_event = asyncio.Event()
@@ -306,8 +313,15 @@ class BotApp:
         logger.info("=" * 60)
         logger.info(f"PumpBot mulai - mode={self.mode.upper()} "
                     f"quote={self.cfg.quote_asset}")
+        logger.info("Bot mulai dalam kondisi PAUSE (tidak auto-start). "
+                    "Tekan tombol 'Resume Bot' di dashboard untuk mulai "
+                    "mencari entry. Posisi lama tetap dikelola.")
         logger.info("=" * 60)
-        notify(f"🚀 PumpBot mulai (mode {self.mode.upper()})")
+        self.db.record_event(
+            "INFO", "CONTROL",
+            "bot mulai dalam kondisi PAUSE - tekan Resume di dashboard")
+        notify(f"🚀 PumpBot mulai (mode {self.mode.upper()}) dalam kondisi "
+               f"⏸ PAUSE. Tekan Resume di dashboard untuk mulai trading.")
 
         try:
             # seluruh startup + loop utama dibungkus try/finally supaya

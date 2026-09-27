@@ -288,6 +288,12 @@ BINANCE_API_SECRET=...
 python run.py
 ```
 
+> ⏸ **Bot tidak auto-start trading.** Setelah `python run.py` dijalankan,
+> bot berada dalam kondisi **PAUSE**: dashboard, data pasar, dan pengelolaan
+> posisi lama tetap berjalan, tetapi bot **tidak membuka posisi baru** sampai
+> Anda menekan tombol **▶ Resume Bot** di dashboard. Ini berlaku untuk mode
+> `paper` maupun `live`.
+
 Untuk mengganti mode, buka **`config/config.yaml`** lalu ubah satu baris ini:
 
 ```yaml

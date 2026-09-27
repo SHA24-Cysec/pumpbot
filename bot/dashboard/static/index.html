@@ -5,99 +5,191 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PumpBot - Dashboard Trading</title>
 <style>
+  /* ==========================================================
+     PumpBot — Tema "Aurora Spectrum" (glassmorphism + aurora bergerak)
+     Palet tenang satu aksen (sky) + semantik hijau/merah.
+     Panel = kaca: latar semi-transparan, backdrop blur,
+     border hairline terang, highlight inset di tepi atas.
+     ========================================================== */
   :root{
-    --bg:#0b0e14; --panel:#121826; --panel2:#0e1420; --line:#1e2735;
-    --text:#dce3f0; --muted:#8b98ab; --green:#2ecc71; --red:#e74c3c;
-    --blue:#3b82f6; --amber:#f59e0b; --purple:#a78bfa;
+    --bg:#070a14;
+    --text:#e6ebf4; --muted:#8fa0b8;
+    --line:rgba(148,163,184,.13);
+    --line-strong:rgba(148,163,184,.22);
+    --glass:linear-gradient(165deg,rgba(255,255,255,.055),rgba(255,255,255,.022));
+    --glass-flat:rgba(255,255,255,.04);
+    --well:rgba(3,8,18,.42);              /* permukaan cekung: input, log, track */
+    --blur:blur(18px) saturate(150%);
+    --radius:14px;
+    --shadow:0 12px 32px rgba(2,6,16,.38), inset 0 1px 0 rgba(255,255,255,.07);
+    --green:#34d399; --red:#f87171; --blue:#22d3ee;
+    --amber:#fbbf24; --purple:#a78bfa;
+    /* kompatibilitas nama variabel lama */
+    --panel:rgba(255,255,255,.04); --panel2:rgba(3,8,18,.42);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{min-width:0;overflow-x:hidden}
   body{background:var(--bg);color:var(--text);min-width:0;overflow-x:hidden;
-       font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;
-       padding:clamp(8px,1.4vw,16px)}
-  h1{font-size:clamp(16px,1.6vw,20px);font-weight:700;letter-spacing:.5px;white-space:nowrap}
-  h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);
-     margin-bottom:8px}
+       font:14px/1.5 "Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+       padding:clamp(8px,1.4vw,16px);min-height:100vh}
+  /* dasar langit malam (statis) */
+  body::before{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
+    background:linear-gradient(180deg,#0a0e1c 0%,#070a14 58%)}
+  /* aurora spectrum: dua pita cahaya (hijau-cyan-violet-pink) yang di-blur
+     dan bergeser sangat perlahan. CSS murni, dimatikan otomatis bila OS
+     meminta reduksi gerakan. */
+  .aurora{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
+  .aurora::before,.aurora::after{content:"";position:absolute;filter:blur(64px)}
+  .aurora::before{left:-15%;right:-15%;top:-32%;height:78%;opacity:.4;
+    background:
+      radial-gradient(45% 80% at 10% 30%, rgba(52,211,153,.40), transparent 60%),
+      radial-gradient(45% 80% at 40% 15%, rgba(34,211,238,.35), transparent 60%),
+      radial-gradient(45% 75% at 70% 25%, rgba(139,92,246,.35), transparent 60%),
+      radial-gradient(40% 70% at 95% 40%, rgba(236,72,153,.28), transparent 60%);
+    animation:auroraA 18s ease-in-out infinite alternate}
+  .aurora::after{left:-20%;right:-20%;bottom:-38%;height:68%;opacity:.32;
+    background:
+      radial-gradient(50% 75% at 25% 80%, rgba(45,212,191,.20), transparent 60%),
+      radial-gradient(45% 70% at 80% 78%, rgba(168,85,247,.20), transparent 60%);
+    animation:auroraB 24s ease-in-out infinite alternate}
+  @keyframes auroraA{from{transform:translateX(-3%) rotate(-2deg)}
+                     to{transform:translateX(3%) rotate(2deg)}}
+  @keyframes auroraB{from{transform:translateX(2.5%)}to{transform:translateX(-2.5%)}}
+  @media (prefers-reduced-motion:reduce){
+    .aurora::before,.aurora::after{animation:none}
+  }
+  h1{font-size:clamp(16px,1.6vw,20px);font-weight:700;letter-spacing:.4px;white-space:nowrap}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:1.4px;color:var(--muted);
+     font-weight:700;margin-bottom:10px}
+
+  ::selection{background:rgba(34,211,238,.28)}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:rgba(148,163,184,.22);border-radius:99px;
+    border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(148,163,184,.38);
+    border:2px solid transparent;background-clip:content-box}
+
   .header{display:flex;align-items:center;gap:clamp(8px,1vw,14px);flex-wrap:wrap;
           padding:clamp(10px,1.1vw,12px) clamp(10px,1.3vw,16px);
-          background:var(--panel);border:1px solid var(--line);
-          border-radius:10px;margin-bottom:14px;min-width:0}
+          background:var(--glass);border:1px solid var(--line-strong);
+          border-radius:var(--radius);margin-bottom:14px;min-width:0;
+          backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+          box-shadow:var(--shadow);position:sticky;top:8px;z-index:50}
   .header>span{min-width:0}
-  .badge{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700}
+  .badge{padding:3px 11px;border-radius:999px;font-size:11.5px;font-weight:700;
+         letter-spacing:.4px;border:1px solid transparent}
   /* hijau = akun demo (dana virtual), merah = uang sungguhan */
-  .badge.paper{background:#14532d;color:#86efac}
-  .badge.live{background:#7f1d1d;color:#fca5a5}
-  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px}
-  .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
-  .dot.off{background:var(--red)}
-  button{background:var(--panel2);color:var(--text);border:1px solid var(--line);
-         padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;
-         min-height:34px;white-space:nowrap}
-  button:hover{border-color:var(--blue)}
-  button.danger{border-color:#7f1d1d;color:#fca5a5}
-  button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
-  button.accent{background:rgba(167,139,250,.14);border-color:var(--purple);
-                color:#ddd0ff;font-weight:600}
-  button.accent:hover{background:rgba(167,139,250,.26);border-color:#c4b5fd}
+  .badge.paper{background:rgba(52,211,153,.1);color:#6ee7b7;border-color:rgba(52,211,153,.32)}
+  .badge.live{background:rgba(248,113,113,.1);color:#fca5a5;border-color:rgba(248,113,113,.35)}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
+  .dot.on{background:var(--green);box-shadow:0 0 10px rgba(52,211,153,.8)}
+  .dot.off{background:var(--red);box-shadow:0 0 8px rgba(248,113,113,.5)}
+
+  button{background:rgba(148,163,184,.07);color:var(--text);
+         border:1px solid var(--line-strong);
+         padding:7px 14px;border-radius:10px;cursor:pointer;font-size:13px;
+         min-height:34px;white-space:nowrap;font-family:inherit;
+         transition:border-color .15s,background .15s,box-shadow .15s,transform .1s}
+  button:hover{border-color:rgba(34,211,238,.5);background:rgba(148,163,184,.12)}
+  button:active{transform:translateY(1px)}
+  button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(34,211,238,.25)}
+  button.danger{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.38);color:#fca5a5}
+  button.danger:hover{border-color:rgba(248,113,113,.6);background:rgba(248,113,113,.14)}
+  button.primary{background:linear-gradient(180deg,#0ea5e9,#0473b4);
+                 border-color:rgba(125,211,252,.45);color:#f0f9ff;font-weight:600;
+                 box-shadow:0 4px 16px rgba(14,165,233,.22), inset 0 1px 0 rgba(255,255,255,.25)}
+  button.primary:hover{background:linear-gradient(180deg,#22b1f2,#0284c7);
+                 border-color:rgba(165,225,254,.6)}
+  button.accent{background:rgba(167,139,250,.09);border-color:rgba(167,139,250,.38);
+                color:#d8ceff;font-weight:600}
+  button.accent:hover{background:rgba(167,139,250,.16);border-color:rgba(196,181,253,.55)}
+
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr));
          gap:clamp(8px,1vw,10px);margin-bottom:14px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-        padding:clamp(10px,1.1vw,12px) clamp(10px,1.2vw,14px);min-width:0}
-  .card .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;
-             letter-spacing:.6px}
-  .card .val{font-size:clamp(16px,1.8vw,20px);font-weight:700;margin-top:3px;
-             font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+  /* >=900px: 8 kartu selalu 2 baris x 4 kolom, tidak ada kartu yatim */
+  @media(min-width:900px){.cards{grid-template-columns:repeat(4,1fr)}}
+  .card{background:var(--glass);border:1px solid var(--line);border-radius:var(--radius);
+        padding:clamp(10px,1.1vw,12px) clamp(10px,1.2vw,14px);min-width:0;
+        backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+        box-shadow:var(--shadow);transition:border-color .2s,transform .2s}
+  .card:hover{border-color:var(--line-strong);transform:translateY(-1px)}
+  .card .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;
+             letter-spacing:.9px;font-weight:600}
+  .card .val{font-size:clamp(16px,1.8vw,20px);font-weight:700;margin-top:4px;
+             font-variant-numeric:tabular-nums;overflow-wrap:anywhere;
+             letter-spacing:-.2px}
   .card .sub{font-size:11px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
   .pos{color:var(--green)} .neg{color:var(--red)} .mut{color:var(--muted)}
+
   .grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);
         gap:14px;align-items:start}
   .grid>div{min-width:0}
   @media(max-width:1280px){.grid{grid-template-columns:1fr}}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-         padding:clamp(10px,1.2vw,14px);margin-bottom:14px;overflow:hidden;min-width:0}
+  .panel{background:var(--glass);border:1px solid var(--line);border-radius:var(--radius);
+         padding:clamp(10px,1.2vw,14px);margin-bottom:14px;overflow:hidden;min-width:0;
+         backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+         box-shadow:var(--shadow)}
+
   table{width:100%;min-width:max-content;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
-  th{color:var(--muted);text-align:left;font-weight:600;padding:6px 8px;
-     border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+  th{color:var(--muted);text-align:left;font-weight:600;padding:7px 8px;
+     font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;
+     border-bottom:1px solid var(--line-strong);position:sticky;top:0;
+     background:rgba(13,19,32,.9);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
   td{padding:6px 8px;border-bottom:1px solid var(--line);
      font-variant-numeric:tabular-nums}
-  tr:hover td{background:var(--panel2)}
-  .scroll{max-height:min(320px,45vh);overflow:auto;-webkit-overflow-scrolling:touch}
-  .scorebar{height:6px;background:var(--panel2);border-radius:4px;overflow:hidden;
+  tr:hover td{background:rgba(148,163,184,.06)}
+  .scroll{max-height:min(320px,45vh);overflow:auto;-webkit-overflow-scrolling:touch;
+          border-radius:8px}
+
+  .scorebar{height:6px;background:rgba(148,163,184,.12);border-radius:99px;overflow:hidden;
             min-width:60px;flex:1}
-  .scorebar>div{height:100%;border-radius:4px}
-  .sigrow{display:flex;align-items:center;gap:10px;padding:6px 4px;
-          border-bottom:1px solid var(--line);font-size:12.5px}
-  .sigrow .sym{font-weight:700;min-width:96px}
-  .sigrow .sc{min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
-  .sigrow .pr{color:var(--muted);min-width:86px;font-variant-numeric:tabular-nums}
-  .sigrow .flag{font-size:10px;padding:1px 6px;border-radius:6px}
-  .flag.veto{background:#7f1d1d;color:#fca5a5}
-  .flag.gate{background:#78350f;color:#fcd34d}
+  .scorebar>div{height:100%;border-radius:99px}
+  .sigrow{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;padding:6px 4px;
+          border-bottom:1px solid var(--line);font-size:12.5px;min-width:0}
+  .sigrow .sym{font-weight:700;flex:0 1 auto;min-width:0;max-width:112px;
+               overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sigrow .sc{min-width:36px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+  .sigrow .pr{color:var(--muted);flex:0 1 auto;min-width:0;max-width:90px;
+              overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+              font-variant-numeric:tabular-nums}
+  .sigrow .flag{font-size:10px;padding:1px 7px;border-radius:99px;border:1px solid transparent}
+  .flag.veto{background:rgba(248,113,113,.1);color:#fca5a5;border-color:rgba(248,113,113,.3)}
+  .flag.gate{background:rgba(251,191,36,.09);color:#fcd34d;border-color:rgba(251,191,36,.3)}
   canvas{width:100%;height:220px;display:block}
+
   .formrow{display:flex;align-items:center;justify-content:space-between;
            gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
   .formrow label{color:var(--muted);font-size:12.5px}
-  .formrow input{width:110px;background:var(--panel2);border:1px solid var(--line);
-                 color:var(--text);padding:5px 8px;border-radius:6px;
-                 font-variant-numeric:tabular-nums}
-  .formrow input[type=checkbox]{width:auto}
-  .toast{position:fixed;bottom:18px;right:18px;background:var(--panel2);
-         border:1px solid var(--line);border-radius:8px;padding:10px 16px;
-         font-size:13px;display:none;z-index:99}
+  .formrow input{width:110px;background:var(--well);border:1px solid var(--line-strong);
+                 color:var(--text);padding:5px 8px;border-radius:8px;font-family:inherit;
+                 font-variant-numeric:tabular-nums;transition:border-color .15s,box-shadow .15s}
+  .formrow input:focus{outline:none;border-color:rgba(34,211,238,.55);
+                 box-shadow:0 0 0 3px rgba(34,211,238,.13)}
+  .formrow input[type=checkbox]{width:auto;accent-color:#0ea5e9}
+
+  .toast{position:fixed;bottom:18px;right:18px;background:rgba(13,19,32,.75);
+         border:1px solid var(--line-strong);border-radius:12px;padding:10px 16px;
+         font-size:13px;display:none;z-index:99;
+         backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+         box-shadow:0 16px 40px rgba(2,6,16,.55), inset 0 1px 0 rgba(255,255,255,.08)}
   .hint{font-size:11px;color:var(--muted);margin-top:6px}
-  .halt{background:#7f1d1d;color:#fecaca;padding:6px 10px;border-radius:8px;
-        font-size:12px;margin-top:8px}
+  .halt{background:rgba(248,113,113,.09);color:#fecaca;padding:6px 10px;
+        border:1px solid rgba(248,113,113,.25);border-left:3px solid var(--red);
+        border-radius:8px;font-size:12px;margin-top:8px}
+
   .evtrow{padding:7px 4px;border-bottom:1px solid var(--line);font-size:12px}
   .evtrow .meta{display:flex;gap:8px;align-items:center;margin-bottom:2px}
-  .evtrow .lvl{font-size:10px;padding:1px 6px;border-radius:6px;font-weight:700}
-  .evtrow.error .lvl{background:#7f1d1d;color:#fecaca}
-  .evtrow.warning .lvl{background:#78350f;color:#fcd34d}
-  .evtrow.info .lvl{background:#1e3a8a;color:#bfdbfe}
+  .evtrow .lvl{font-size:10px;padding:1px 7px;border-radius:99px;font-weight:700;
+               border:1px solid transparent}
+  .evtrow.error .lvl{background:rgba(248,113,113,.1);color:#fca5a5;border-color:rgba(248,113,113,.3)}
+  .evtrow.warning .lvl{background:rgba(251,191,36,.09);color:#fcd34d;border-color:rgba(251,191,36,.3)}
+  .evtrow.info .lvl{background:rgba(34,211,238,.09);color:#a5f3fc;border-color:rgba(34,211,238,.28)}
   .evtmsg{color:var(--text);white-space:normal;word-break:break-word}
 
   @media(max-width:760px){
     body{font-size:12px;padding:8px}
-    .header{align-items:flex-start;padding:10px;gap:8px}
+    .header{align-items:flex-start;padding:10px;gap:8px;position:static}
     .header h1{flex:1 1 100%;font-size:16px}
     #btnPause{width:100%}
     .cards{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -122,13 +214,38 @@
     .sigrow .scorebar{grid-column:1 / -1}
   }
 
+  /* ================= MENU TAB ================= */
+  .tabs{display:flex;gap:6px;margin-bottom:14px;padding:6px;
+        background:var(--glass);border:1px solid var(--line);
+        border-radius:var(--radius);backdrop-filter:var(--blur);
+        -webkit-backdrop-filter:var(--blur);box-shadow:var(--shadow);
+        overflow-x:auto;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs .tab{flex:0 0 auto;background:transparent;border:1px solid transparent;
+        color:var(--muted);font-weight:600;font-size:12.5px;letter-spacing:.3px;
+        padding:7px 16px;border-radius:9px;min-height:32px;box-shadow:none}
+  .tabs .tab:hover{color:var(--text);background:rgba(148,163,184,.08);
+        border-color:transparent}
+  .tabs .tab.on{color:#c9f1fb;background:rgba(34,211,238,.13);
+        border-color:rgba(34,211,238,.38);
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.1), 0 2px 10px rgba(34,211,238,.15)}
+  .sempit{max-width:760px}
+  .tabpage{display:none}
+  .tabpage.on{display:block;animation:tabIn .18s ease-out}
+  @keyframes tabIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  @media(max-width:760px){
+    .tabs{padding:5px;gap:4px;flex-wrap:wrap}
+    .tabs .tab{padding:6px 12px;font-size:11.5px}
+  }
+
   /* ================= BACKTEST & OPTIMASI ================= */
-  #btPanel{border-color:var(--purple);
-           box-shadow:0 0 0 1px rgba(167,139,250,.18), 0 6px 22px rgba(167,139,250,.07)}
+  #btPanel{border-color:rgba(167,139,250,.3);
+           box-shadow:0 0 0 1px rgba(167,139,250,.1), 0 12px 32px rgba(2,6,16,.38),
+                      inset 0 1px 0 rgba(255,255,255,.07)}
   #btPanel.sorot{animation:btSorot 1.5s ease-out 2}
   @keyframes btSorot{
-    0%,100%{box-shadow:0 0 0 1px rgba(167,139,250,.18), 0 6px 22px rgba(167,139,250,.07)}
-    50%    {box-shadow:0 0 0 3px rgba(167,139,250,.55), 0 6px 30px rgba(167,139,250,.30)}
+    0%,100%{box-shadow:0 0 0 1px rgba(167,139,250,.1), 0 12px 32px rgba(2,6,16,.38)}
+    50%    {box-shadow:0 0 0 3px rgba(167,139,250,.5), 0 6px 30px rgba(167,139,250,.28)}
   }
   #btPanel .bt-head h2{color:#c4b5fd}
   .bt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;
@@ -138,25 +255,29 @@
   .bt-open .bt-caret{transform:rotate(90deg)}
   .bt-body{display:none;margin-top:12px}
   .bt-open .bt-body{display:block}
-  .bt-note{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--blue);
-           border-radius:8px;padding:9px 12px;font-size:12px;color:var(--muted);
+  .bt-note{background:var(--well);border:1px solid var(--line);border-left:3px solid var(--blue);
+           border-radius:10px;padding:9px 12px;font-size:12px;color:var(--muted);
            margin-bottom:12px;white-space:normal}
   .bt-note.warn{border-left-color:var(--amber);color:#fcd34d}
   .bt-note.stop{border-left-color:var(--red);color:#fca5a5}
   .bt-note b{color:var(--text)}
   .bt-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));
            gap:12px;margin-bottom:12px}
-  .bt-group{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
-            padding:10px 12px;min-width:0}
-  .bt-group h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;
+  .bt-group{background:rgba(255,255,255,.028);border:1px solid var(--line);
+            border-radius:10px;padding:10px 12px;min-width:0}
+  .bt-group h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.9px;
                color:var(--muted);margin-bottom:8px;font-weight:700}
   .bt-f{display:flex;align-items:center;justify-content:space-between;gap:8px;
         padding:4px 0;font-size:12.5px;min-width:0}
   .bt-f label{color:var(--muted);flex:0 0 auto;white-space:nowrap}
-  .bt-f input,.bt-f select{width:118px;max-width:55%;background:var(--panel);
-        border:1px solid var(--line);color:var(--text);padding:4px 7px;
-        border-radius:6px;font-size:12.5px;font-variant-numeric:tabular-nums}
-  .bt-f input[type=checkbox]{width:auto;max-width:none}
+  .bt-f input,.bt-f select{width:118px;max-width:55%;background:var(--well);
+        border:1px solid var(--line-strong);color:var(--text);padding:4px 7px;
+        border-radius:8px;font-size:12.5px;font-variant-numeric:tabular-nums;
+        font-family:inherit;transition:border-color .15s,box-shadow .15s}
+  .bt-f input:focus,.bt-f select:focus{outline:none;border-color:rgba(34,211,238,.55);
+        box-shadow:0 0 0 3px rgba(34,211,238,.13)}
+  .bt-f select option{background:#0d1320;color:var(--text)}
+  .bt-f input[type=checkbox]{width:auto;max-width:none;accent-color:#0ea5e9}
   .bt-f input.wide{width:100%;max-width:none}
   .bt-f.col{flex-direction:column;align-items:stretch;gap:4px}
   .bt-f.col label{white-space:normal}
@@ -165,29 +286,30 @@
   .bt-est b{color:var(--text)}
   .bt-est.over{color:#fca5a5}
   .bt-prog{margin-bottom:10px}
-  .bt-bar{height:10px;background:var(--panel2);border:1px solid var(--line);
-          border-radius:6px;overflow:hidden}
-  .bt-bar>div{height:100%;width:0;background:var(--blue);transition:width .25s}
-  .bt-bar.done>div{background:var(--green)}
-  .bt-bar.err>div{background:var(--red)}
+  .bt-bar{height:10px;background:var(--well);border:1px solid var(--line);
+          border-radius:99px;overflow:hidden}
+  .bt-bar>div{height:100%;width:0;border-radius:99px;transition:width .25s;
+          background:linear-gradient(90deg,#22d3ee,#a78bfa)}
+  .bt-bar.done>div{background:linear-gradient(90deg,#10b981,#34d399)}
+  .bt-bar.err>div{background:linear-gradient(90deg,#ef4444,#f87171)}
   .bt-meta{display:flex;justify-content:space-between;gap:10px;font-size:11.5px;
            color:var(--muted);margin-top:4px;flex-wrap:wrap}
-  .bt-log{max-height:190px;overflow:auto;background:var(--panel2);
-          border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+  .bt-log{max-height:190px;overflow:auto;background:var(--well);
+          border:1px solid var(--line);border-radius:10px;padding:8px 10px;
           font:11.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
           white-space:pre-wrap;word-break:break-word;margin-bottom:12px}
   .bt-log .e{color:#fca5a5}
   .bt-log .w{color:#fcd34d}
   .bt-res tbody tr{cursor:pointer}
-  .bt-res tbody tr.sel td{background:#1e3a8a33;box-shadow:inset 2px 0 0 var(--blue)}
-  .bt-res .oos{border-left:2px solid var(--line)}
+  .bt-res tbody tr.sel td{background:rgba(34,211,238,.1);box-shadow:inset 2px 0 0 var(--blue)}
+  .bt-res .oos{border-left:2px solid var(--line-strong)}
   .bt-res td.neg,.bt-res td.pos{font-weight:600}
-  .bt-apply{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
-            padding:10px 12px;margin-top:12px}
+  .bt-apply{background:rgba(255,255,255,.028);border:1px solid var(--line);
+            border-radius:10px;padding:10px 12px;margin-top:12px}
   .bt-chk{display:flex;align-items:flex-start;gap:8px;padding:5px 0;font-size:12.5px}
-  .bt-chk input{margin-top:3px}
+  .bt-chk input{margin-top:3px;accent-color:#0ea5e9}
   .bt-chk .d{color:var(--muted);font-size:11.5px;display:block}
-  .bt-yaml{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  .bt-yaml{background:var(--well);border:1px solid var(--line);border-radius:10px;
            padding:10px 12px;margin-top:10px;
            font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
            white-space:pre;overflow:auto;max-height:240px;color:var(--muted)}
@@ -199,6 +321,7 @@
 </style>
 </head>
 <body>
+<div class="aurora" aria-hidden="true"></div>
 
 <!-- ================= HEADER ================= -->
 <div class="header">
@@ -210,9 +333,19 @@
   <span style="flex:1"></span>
   <button id="btnGoBt" class="accent" title="Cari kombinasi SL/TP/BE/trailing terbaik dari data historis">🔬 Backtest &amp; Optimasi</button>
   <!-- UI-BUILD: backtest-2 -->
-  <button id="btnPause" class="primary">⏸ Pause Bot</button>
+  <button id="btnPause" class="primary">▶ Resume Bot</button>
 </div>
 
+<!-- ================= MENU TAB ================= -->
+<nav class="tabs" id="tabs">
+  <button class="tab on" data-tab="ringkasan">📊 Ringkasan</button>
+  <button class="tab" data-tab="histori">🧾 Histori</button>
+  <button class="tab" data-tab="backtest">🔬 Backtest</button>
+  <button class="tab" data-tab="risiko">⚙️ Risiko</button>
+</nav>
+
+<!-- ================= TAB: RINGKASAN ================= -->
+<section class="tabpage on" id="page-ringkasan">
 <!-- ================= KARTU RINGKASAN ================= -->
 <div class="cards">
   <div class="card"><div class="lbl">Total Modal (Equity)</div>
@@ -233,6 +366,71 @@
     <div class="val" id="mdd">-</div><div class="sub">dari equity curve</div></div>
 </div>
 
+  <div class="grid">
+    <div>
+<!-- ================= EQUITY CURVE ================= -->
+<div class="panel">
+  <h2>Equity Curve</h2>
+  <canvas id="curve"></canvas>
+</div>
+
+<!-- ================= POSISI TERBUKA ================= -->
+    <div class="panel">
+      <h2>Posisi Terbuka</h2>
+      <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Pair</th><th>Entry</th><th>Harga</th><th>Qty</th><th>Nilai</th>
+          <th>SL</th><th>TP</th><th>BE</th><th>Trail</th><th>PnL%</th><th>PnL</th>
+          <th>Mode</th><th></th>
+        </tr></thead>
+        <tbody id="positions"><tr><td colspan="13" class="mut">belum ada posisi</td></tr></tbody>
+      </table>
+      </div>
+    </div>
+    </div>
+    <div>
+<!-- ================= PANEL SINYAL ================= -->
+    <div class="panel">
+      <h2>Panel Sinyal <span class="mut" style="text-transform:none">(skor detector)</span></h2>
+      <div class="scroll" id="signals"><div class="mut">menunggu data…</div></div>
+      <div class="hint">Bar = skor gabungan. Rincian per detector tampil saat hover.
+        Threshold entry ditentukan parameter skor minimum.</div>
+    </div>
+
+<!-- ================= PERINGATAN / EVENT ================= -->
+    <div class="panel">
+      <h2>Peringatan / Event Terbaru</h2>
+      <div class="scroll" id="events"><div class="mut">belum ada event</div></div>
+    </div>
+
+<div class="panel">
+      <h2>Skor per Detector (teratas)</h2>
+      <div id="det" class="mut" style="font-size:12px">-</div>
+    </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TAB: HISTORI ================= -->
+<section class="tabpage" id="page-histori">
+<!-- ================= HISTORI ================= -->
+    <div class="panel">
+      <h2>Histori Transaksi</h2>
+      <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Pair</th><th>Waktu Entry</th><th>Waktu Exit</th><th>Entry</th>
+          <th>Exit</th><th>Qty</th><th>PnL</th><th>Alasan Exit</th>
+        </tr></thead>
+        <tbody id="history"><tr><td colspan="8" class="mut">belum ada transaksi</td></tr></tbody>
+      </table>
+      </div>
+    </div>
+</section>
+
+<!-- ================= TAB: BACKTEST ================= -->
+<section class="tabpage" id="page-backtest">
 <!-- ================= BACKTEST & OPTIMASI PARAMETER ================= -->
 <div class="panel bt-open" id="btPanel">
   <div class="bt-head" id="btToggle">
@@ -411,61 +609,12 @@
     </div>
   </div>
 </div>
+</section>
 
-<!-- ================= EQUITY CURVE ================= -->
-<div class="panel">
-  <h2>Equity Curve</h2>
-  <canvas id="curve"></canvas>
-</div>
-
-<div class="grid">
-  <div>
-    <!-- ================= POSISI TERBUKA ================= -->
-    <div class="panel">
-      <h2>Posisi Terbuka</h2>
-      <div class="scroll">
-      <table>
-        <thead><tr>
-          <th>Pair</th><th>Entry</th><th>Harga</th><th>Qty</th><th>Nilai</th>
-          <th>SL</th><th>TP</th><th>BE</th><th>Trail</th><th>PnL%</th><th>PnL</th>
-          <th>Mode</th><th></th>
-        </tr></thead>
-        <tbody id="positions"><tr><td colspan="13" class="mut">belum ada posisi</td></tr></tbody>
-      </table>
-      </div>
-    </div>
-
-    <!-- ================= HISTORI ================= -->
-    <div class="panel">
-      <h2>Histori Transaksi</h2>
-      <div class="scroll">
-      <table>
-        <thead><tr>
-          <th>Pair</th><th>Waktu Entry</th><th>Waktu Exit</th><th>Entry</th>
-          <th>Exit</th><th>Qty</th><th>PnL</th><th>Alasan Exit</th>
-        </tr></thead>
-        <tbody id="history"><tr><td colspan="8" class="mut">belum ada transaksi</td></tr></tbody>
-      </table>
-      </div>
-    </div>
-  </div>
-
-  <div>
-    <!-- ================= PERINGATAN / EVENT ================= -->
-    <div class="panel">
-      <h2>Peringatan / Event Terbaru</h2>
-      <div class="scroll" id="events"><div class="mut">belum ada event</div></div>
-    </div>
-
-    <!-- ================= PANEL SINYAL ================= -->
-    <div class="panel">
-      <h2>Panel Sinyal <span class="mut" style="text-transform:none">(skor detector)</span></h2>
-      <div class="scroll" id="signals"><div class="mut">menunggu data…</div></div>
-      <div class="hint">Bar = skor gabungan. Rincian per detector tampil saat hover.
-        Threshold entry ditentukan parameter skor minimum.</div>
-    </div>
-
-    <!-- ================= PARAMETER RISIKO LIVE ================= -->
+<!-- ================= TAB: RISIKO ================= -->
+<section class="tabpage" id="page-risiko">
+  <div class="sempit">
+<!-- ================= PARAMETER RISIKO LIVE ================= -->
     <div class="panel">
       <h2>Parameter Risiko (live)</h2>
       <div id="params"></div>
@@ -477,13 +626,8 @@
         dan dicatat di log.</div>
       <div id="paramErr" class="halt" style="display:none"></div>
     </div>
-
-    <div class="panel">
-      <h2>Skor per Detector (teratas)</h2>
-      <div id="det" class="mut" style="font-size:12px">-</div>
-    </div>
   </div>
-</div>
+</section>
 
 
 <div class="toast" id="toast"></div>
@@ -515,7 +659,9 @@ const ts = ms => ms ? new Date(ms).toLocaleTimeString("id-ID") : "-";
 const tsFull = ms => ms ? new Date(ms).toLocaleString("id-ID") : "-";
 
 let S = null;          // snapshot terakhir
-let paused = false;
+// Bot selalu mulai dalam kondisi PAUSE (tidak auto-start trading);
+// nilai sebenarnya disinkronkan lagi dari snapshot websocket.
+let paused = true;
 let toastTimer = null;
 const TOP_WARNING_TTL_MS = 30 * 1000;  // banner OCO di atas auto-hilang 30 detik
 
@@ -754,7 +900,7 @@ function drawCurve(){
 
   const data = S.equity_curve || [];
   if(data.length < 2){
-    ctx.fillStyle = "#8b98ab"; ctx.font = "13px sans-serif";
+    ctx.fillStyle = "#8fa0b8"; ctx.font = "13px sans-serif";
     ctx.fillText("Belum cukup data equity (diambil tiap 30 detik)…", 12, h/2);
     return;
   }
@@ -768,15 +914,15 @@ function drawCurve(){
   // garis start equity (modal awal)
   const se = S.balance.start_equity;
   if(se>lo && se<hi){
-    ctx.strokeStyle="#334155"; ctx.setLineDash([4,4]); ctx.lineWidth=1;
+    ctx.strokeStyle="rgba(148,163,184,.35)"; ctx.setLineDash([4,4]); ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(0,Y(se)); ctx.lineTo(w,Y(se)); ctx.stroke();
     ctx.setLineDash([]);
   }
   // area + garis
   const up = ys[ys.length-1] >= ys[0];
-  const col = up ? "#2ecc71" : "#e74c3c";
+  const col = up ? "#34d399" : "#f87171";
   const grad = ctx.createLinearGradient(0,0,0,h);
-  grad.addColorStop(0, up?"rgba(46,204,113,.28)":"rgba(231,76,60,.28)");
+  grad.addColorStop(0, up?"rgba(52,211,153,.24)":"rgba(248,113,113,.22)");
   grad.addColorStop(1,"rgba(0,0,0,0)");
   ctx.beginPath(); ctx.moveTo(X(0),Y(ys[0]));
   for(let i=1;i<ys.length;i++) ctx.lineTo(X(i),Y(ys[i]));
@@ -785,7 +931,7 @@ function drawCurve(){
   ctx.fillStyle=grad; ctx.fill();
 
   // label min/max/terakhir
-  ctx.fillStyle="#8b98ab"; ctx.font="11px sans-serif";
+  ctx.fillStyle="#8fa0b8"; ctx.font="11px sans-serif";
   ctx.fillText(fmt(hi,2), 6, 14);
   ctx.fillText(fmt(lo,2), 6, h-6);
   ctx.fillStyle=col;
@@ -1160,13 +1306,13 @@ $("btToggle").onclick = () => {
 // Tombol pintasan di header: buka panel, gulir ke sana, lalu sorot sebentar
 // supaya tidak tenggelam di antara panel lain.
 $("btnGoBt").onclick = () => {
+  setTab("backtest");          // panel backtest kini punya tab sendiri
   const p = $("btPanel");
   if(!p.classList.contains("bt-open")){
     p.classList.add("bt-open");
     btEstimate();
     btPoll();
   }
-  p.scrollIntoView({ behavior: "smooth", block: "start" });
   p.classList.remove("sorot");
   void p.offsetWidth;          // paksa reflow supaya animasi bisa diulang
   p.classList.add("sorot");
@@ -1296,6 +1442,27 @@ async function btInit(){
     if(st.status === "running") btPollOn();
   }
 }
+
+/* --------- menu tab --------- */
+function setTab(name){
+  document.querySelectorAll(".tabpage").forEach(p =>
+    p.classList.toggle("on", p.id === "page-" + name));
+  document.querySelectorAll(".tabs .tab").forEach(b =>
+    b.classList.toggle("on", b.dataset.tab === name));
+  try{ localStorage.setItem("pumpbot_tab", name); }catch(e){}
+  // canvas tidak bisa digambar saat display:none -> gambar ulang begitu tampil
+  if(name === "ringkasan" && S) drawCurve();
+  // masuk tab backtest: segarkan estimasi & status job
+  if(name === "backtest" && typeof btEstimate === "function"){ btEstimate(); btPoll(); }
+}
+document.querySelectorAll(".tabs .tab").forEach(b => {
+  b.onclick = () => setTab(b.dataset.tab);
+});
+(function(){
+  let t = null;
+  try{ t = localStorage.getItem("pumpbot_tab"); }catch(e){}
+  if(t && document.getElementById("page-" + t)) setTab(t);
+})();
 
 window.addEventListener("resize", ()=>{ if(S) drawCurve(); });
 setPauseUI();
