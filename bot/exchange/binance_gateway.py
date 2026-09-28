@@ -228,6 +228,8 @@ class BinanceGateway(ExchangeGateway):
         # yang me-langgan ulang sendiri). Default "1m".
         self._kline_interval: str = "1m"
         self._cbs: dict = {}
+        self._last_data_ts: float = 0.0
+        self._is_reconnecting: bool = False
         # Cache filter exchangeInfo. Dipakai juga saat membuat OCO agar semua
         # harga leg OCO (TP, stop trigger, stop-limit) patuh PRICE_FILTER.
         self._symbol_filters: dict[str, SymbolFilters] = {}
@@ -275,18 +277,89 @@ class BinanceGateway(ExchangeGateway):
         # ping sekali untuk memvalidasi koneksi & kredensial lebih awal
         await self._rest(self._client.rest_api.ping)
 
+    def _clean_stale_global_streams(self) -> None:
+        """
+        Bersihkan entri mapping stream SDK yang menunjuk ke koneksi mati/tertutup.
+        Tanpa ini, SDK binance-common memfilter stream yang pernah didaftarkan
+        sehingga resubscribe menganggap stream sudah aktif padahal koneksi lamanya
+        sudah mati.
+        """
+        try:
+            from binance_common.websocket import global_stream_connections
+            streams_obj = getattr(self._client, "websocket_streams", None)
+            conns = getattr(streams_obj, "connections", None)
+            active_conns = list(conns) if conns is not None else []
+            for stream, conn in list(global_stream_connections.stream_connections_map.items()):
+                if conn not in active_conns or not getattr(conn, "is_open", False):
+                    global_stream_connections.stream_connections_map.pop(stream, None)
+        except Exception as exc:
+            logger.debug(f"Pembersihan global_stream_connections dilewati: {exc}")
+
+    def _setup_connection_events(self) -> None:
+        """Pasang listener event koneksi ke websocket_streams SDK."""
+        streams = getattr(self._client, "websocket_streams", None)
+        if streams is None or not hasattr(streams, "on_connection"):
+            return
+        try:
+            streams.on_connection("open", self._on_ws_open)
+            streams.on_connection("reconnect", self._on_ws_reconnect)
+            streams.on_connection("error", self._on_ws_error)
+            streams.on_connection("close", self._on_ws_close)
+        except Exception as exc:
+            logger.debug(f"Pemasangan event koneksi WS: {exc}")
+
+    def _on_ws_open(self, *a, **kw) -> None:
+        self._is_reconnecting = False
+        self._last_data_ts = time.time()
+        logger.info("WebSocket terhubung")
+
+    def _on_ws_reconnect(self, *a, **kw) -> None:
+        self._is_reconnecting = True
+        logger.warning("WebSocket RECONNECTED")
+
+    def _on_ws_error(self, *a, **kw) -> None:
+        logger.error(f"WebSocket error: {a}")
+
+    def _on_ws_close(self, *a, **kw) -> None:
+        self._is_reconnecting = True
+        logger.warning("WebSocket connection closed")
+
+    @property
+    def is_ws_connected(self) -> bool:
+        """True bila koneksi WebSocket aktif dan tidak sedang reconnecting."""
+        if not self._ws_started:
+            return False
+        streams = getattr(self._client, "websocket_streams", None)
+        if streams is None:
+            return False
+        conns = getattr(streams, "connections", None)
+        if not conns:
+            return False
+        if any(getattr(c, "reconnect", False) for c in conns):
+            return False
+        return any(getattr(c, "is_open", False) for c in conns)
+
     async def stop(self) -> None:
         if self._watchdog_task:
             self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._watchdog_task = None
         try:
             for handle in self._stream_handles:
                 try:
                     await handle.unsubscribe()
                 except Exception:
                     pass
-            await self._client.websocket_streams.close_connection(close_session=True)
+            self._stream_handles.clear()
+            streams = getattr(self._client, "websocket_streams", None)
+            if streams is not None and hasattr(streams, "close_connection"):
+                await streams.close_connection(close_session=True)
         except Exception as exc:
             logger.debug(f"Error saat menutup WS: {exc}")
+        self._clean_stale_global_streams()
         self._ws_started = False
 
     # -------------------------------------------------------------- info pasar
@@ -537,12 +610,13 @@ class BinanceGateway(ExchangeGateway):
           bot tidak pernah pulih sendiri setelah internet/listrik mati
           lama (watchdog berulang kali gagal dengan
           "ValueError: No WebSocket connections available").
-        - SDK menolak DIAm-diam (mengembalikan None saat koneksi sedang
+        - SDK menolak DIAM-diam (mengembalikan None saat koneksi sedang
           sibuk reconnect) -> diulang, bukan crash di handle.on().
         - Error non-koneksi (bug program) langsung diteruskan, tidak diulang.
         """
         for attempt in range(1, self.SUBSCRIBE_MAX_ATTEMPTS + 1):
-            await asyncio.sleep(self.SUBSCRIBE_PACE_S)
+            if self.SUBSCRIBE_PACE_S > 0:
+                await asyncio.sleep(self.SUBSCRIBE_PACE_S)
             try:
                 result = await factory()
             except Exception as exc:
@@ -554,10 +628,14 @@ class BinanceGateway(ExchangeGateway):
                 if attempt == self.SUBSCRIBE_MAX_ATTEMPTS:
                     raise                    # teruskan error asli
                 if pool_kosong:
+                    self._clean_stale_global_streams()
                     try:
-                        await self._client.websocket_streams.create_connection()
-                        logger.info("Koneksi WS dibangun ulang "
-                                    "(pool sempat kosong setelah outage)")
+                        streams = getattr(self._client, "websocket_streams", None)
+                        if streams is not None and hasattr(streams, "create_connection"):
+                            await streams.create_connection()
+                            self._setup_connection_events()
+                            logger.info("Koneksi WS dibangun ulang "
+                                        "(pool sempat kosong setelah outage)")
                     except Exception as cexc:
                         logger.warning(f"Bangun ulang koneksi WS gagal "
                                        f"(coba lagi nanti): {cexc}")
@@ -566,7 +644,8 @@ class BinanceGateway(ExchangeGateway):
                     f"Subscribe {label} gagal ({type(exc).__name__}: {exc}) - "
                     f"tunggu {wait_s:.0f}s lalu ulangi "
                     f"({attempt + 1}/{self.SUBSCRIBE_MAX_ATTEMPTS})")
-                await asyncio.sleep(wait_s)
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
                 continue
             if result is not None:
                 return result
@@ -579,7 +658,9 @@ class BinanceGateway(ExchangeGateway):
             logger.warning(f"Subscribe {label} ditunda SDK (koneksi sedang "
                            f"reconnect) - ulangi "
                            f"({attempt + 1}/{self.SUBSCRIBE_MAX_ATTEMPTS})")
-            await asyncio.sleep(self.SUBSCRIBE_RETRY_WAIT_S * attempt)
+            wait_s = self.SUBSCRIBE_RETRY_WAIT_S * attempt
+            if wait_s > 0:
+                await asyncio.sleep(wait_s)
         raise RuntimeError(f"subscribe {label}: tidak terjangkau")
 
     async def subscribe(self, symbols, on_candle, on_trade, on_book, on_ticker,
@@ -591,7 +672,10 @@ class BinanceGateway(ExchangeGateway):
         dihardcode "1m" sehingga config 3m/5m/15m menghasilkan buffer tercampur
         (seed 3m dari REST + update 1m dari WS).
         """
-        self._subscribed_symbols = list(symbols)
+        for sym in symbols:
+            if sym not in self._subscribed_symbols:
+                self._subscribed_symbols.append(sym)
+
         self._cbs = {"candle": on_candle, "trade": on_trade,
                      "book": on_book, "ticker": on_ticker}
         if kline_interval in _INTERVAL_MAP:
@@ -609,19 +693,16 @@ class BinanceGateway(ExchangeGateway):
         interval_ws = self._kline_interval
         levels = self._depth_levels   # tangga 5/10/20 dari imbalance_levels
 
+        streams = getattr(self._client, "websocket_streams", None)
+        if streams is not None:
+            conns = getattr(streams, "connections", None)
+            if not self._ws_started or (conns is not None and len(conns) == 0):
+                if hasattr(streams, "create_connection"):
+                    await streams.create_connection()
+                self._setup_connection_events()
+                self._ws_started = True
 
-        streams = self._client.websocket_streams
-        if not self._ws_started:
-            await streams.create_connection()
-            # Catatan: nama event koneksi HARUS dari daftar yang didukung SDK
-            # (binance_common.SUPPORTED_CONNECTION_EVENTS):
-            # {'ping', 'open', 'reconnect', 'pong', 'close', 'error'}
-            # ('reconnected'/'closed' -> ValueError dan bot mati saat startup).
-            streams.on_connection("open", lambda *a, **kw: logger.info("WebSocket terhubung"))
-            streams.on_connection("reconnect", lambda *a, **kw: logger.warning("WebSocket RECONNECTED"))
-            streams.on_connection("error", lambda *a, **kw: logger.error(f"WebSocket error: {a}"))
-            streams.on_connection("close", lambda *a, **kw: logger.warning("WebSocket connection closed"))
-            self._ws_started = True
+        self._clean_stale_global_streams()
 
         t_start = time.time()
         for idx, sym in enumerate(symbols, start=1):
@@ -631,30 +712,34 @@ class BinanceGateway(ExchangeGateway):
             h = await self._subscribe_with_pace(
                 lambda low=low: streams.kline(symbol=low, interval=interval_ws),
                 f"{sym}:kline")
-            h.on("message", self._make_kline_cb(sym))
-            self._stream_handles.append(h)
+            if h is not None and hasattr(h, "on"):
+                h.on("message", self._make_kline_cb(sym))
+                self._stream_handles.append(h)
 
             # --- aggTrade: setiap trade yang tereksekusi ---
             h = await self._subscribe_with_pace(
                 lambda low=low: streams.agg_trade(symbol=low),
                 f"{sym}:aggTrade")
-            h.on("message", self._make_trade_cb(sym))
-            self._stream_handles.append(h)
+            if h is not None and hasattr(h, "on"):
+                h.on("message", self._make_trade_cb(sym))
+                self._stream_handles.append(h)
 
             # --- partial depth: top-N level order book ---
             h = await self._subscribe_with_pace(
                 lambda low=low: streams.partial_book_depth(symbol=low,
                                                            levels=levels),
                 f"{sym}:depth")
-            h.on("message", self._make_book_cb(sym))
-            self._stream_handles.append(h)
+            if h is not None and hasattr(h, "on"):
+                h.on("message", self._make_book_cb(sym))
+                self._stream_handles.append(h)
 
             # --- ticker 24h: update statistik harian tiap detik ---
             h = await self._subscribe_with_pace(
                 lambda low=low: streams.ticker(symbol=low),
                 f"{sym}:ticker")
-            h.on("message", self._make_ticker_cb(sym))
-            self._stream_handles.append(h)
+            if h is not None and hasattr(h, "on"):
+                h.on("message", self._make_ticker_cb(sym))
+                self._stream_handles.append(h)
 
             if idx % 25 == 0:
                 logger.info(f"Subscribe berjalan: {idx}/{len(symbols)} simbol "
@@ -666,22 +751,24 @@ class BinanceGateway(ExchangeGateway):
 
         # Validasi nama stream: tangkap dini bug "nama stream rusak" yang
         # gagalnya SUNYI (server terima SUBSCRIBE tapi tak ada data).
-        try:
-            subs = await streams.list_subscribe()
-            names = (subs or {}).get("result") if isinstance(subs, dict) else None
-            if names is not None:
-                bad = [n for n in names if "Enum" in str(n)]
-                if bad:
-                    logger.error(f"!! {len(bad)} nama stream RUSAK terdeteksi "
-                                 f"(contoh: {bad[:2]}) - data tidak akan "
-                                 f"mengalir utk stream itu!")
-                else:
-                    logger.info(f"Validasi stream OK: {len(names)} langganan "
-                                f"aktif, nama valid")
-        except Exception as exc:
-            logger.debug(f"validasi list_subscribe dilewati: {exc}")
+        if streams is not None and hasattr(streams, "list_subscribe"):
+            try:
+                subs = await streams.list_subscribe()
+                names = (subs or {}).get("result") if isinstance(subs, dict) else None
+                if names is not None:
+                    bad = [n for n in names if "Enum" in str(n)]
+                    if bad:
+                        logger.error(f"!! {len(bad)} nama stream RUSAK terdeteksi "
+                                     f"(contoh: {bad[:2]}) - data tidak akan "
+                                     f"mengalir utk stream itu!")
+                    else:
+                        logger.info(f"Validasi stream OK: {len(names)} langganan "
+                                    f"aktif, nama valid")
+            except Exception as exc:
+                logger.debug(f"validasi list_subscribe dilewati: {exc}")
 
-        self._watchdog_task = asyncio.create_task(self._watchdog(), name="ws-watchdog")
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self._watchdog(), name="ws-watchdog")
 
     # Callback sync: konversi model SDK -> dataclass internal, tulis ke buffer.
     def _make_kline_cb(self, sym: str) -> Callable:
@@ -690,6 +777,7 @@ class BinanceGateway(ExchangeGateway):
                 kk = k.k
                 if kk is None:
                     return
+                self._last_data_ts = time.time()
                 self._cbs["candle"](sym, Candle(
                     open_time=kk.t, close_time=kk.T,
                     open=_f(kk.o), high=_f(kk.h), low=_f(kk.l), close=_f(kk.c),
@@ -703,6 +791,7 @@ class BinanceGateway(ExchangeGateway):
     def _make_trade_cb(self, sym: str) -> Callable:
         def cb(t):
             try:
+                self._last_data_ts = time.time()
                 self._cbs["trade"](sym, Trade(
                     ts=t.T, price=_f(t.p), qty=_f(t.q), buyer_is_maker=bool(t.m),
                 ))
@@ -713,6 +802,7 @@ class BinanceGateway(ExchangeGateway):
     def _make_book_cb(self, sym: str) -> Callable:
         def cb(b):
             try:
+                self._last_data_ts = time.time()
                 # partial depth stream TIDAK menyertakan simbol -> ditangkap via closure
                 bids = [(_f(lvl[0]), _f(lvl[1])) for lvl in (b.bids or [])]
                 asks = [(_f(lvl[0]), _f(lvl[1])) for lvl in (b.asks or [])]
@@ -725,6 +815,7 @@ class BinanceGateway(ExchangeGateway):
     def _make_ticker_cb(self, sym: str) -> Callable:
         def cb(t):
             try:
+                self._last_data_ts = time.time()
                 self._cbs["ticker"](sym, Ticker24h(
                     ts=t.E, symbol=sym, last_price=_f(t.c),
                     price_change_pct=_f(t.P), high=_f(t.h), low=_f(t.l),
@@ -747,36 +838,57 @@ class BinanceGateway(ExchangeGateway):
             await self._watchdog_once()
 
     async def _watchdog_once(self) -> None:
-        """Satu siklus watchdog: cek langganan, pulihkan bila mati."""
-        try:
-            subs = await self._client.websocket_streams.list_subscribe()
-            if isinstance(subs, dict) and "result" in subs:
-                # bentuk balasan sebenarnya: {"result": [nama, ...], "id": ..}
-                total = len(subs.get("result") or [])
-            elif isinstance(subs, dict):
-                total = sum(len(v) for v in subs.values()
-                            if isinstance(v, (list, dict)))
-            else:
-                # pool koneksi kosong (list_subscribe tak punya koneksi
-                # untuk ditanya) -> anggap semua mati, pulihkan.
-                total = 0
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning(f"Watchdog: list_subscribe gagal ({exc}) - "
-                           f"anggap semua stream mati, coba pulihkan")
-            total = 0
+        """Satu siklus watchdog: cek koneksi dan langganan, pulihkan bila mati."""
+        if not self._subscribed_symbols:
+            return
 
-        if total == 0 and self._subscribed_symbols:
+        streams = getattr(self._client, "websocket_streams", None)
+        conns = getattr(streams, "connections", None)
+
+        # Jika SDK sedang dalam proses reconnect, jangan ganggu siklus reconnect bawaan SDK
+        if conns is not None and any(getattr(c, "reconnect", False) for c in conns):
+            logger.info("Watchdog: SDK sedang dalam proses reconnect, menunggu...")
+            return
+
+        total = 0
+        pool_mati = False
+        if conns is not None:
+            if len(conns) == 0 or not any(getattr(c, "is_open", False) for c in conns):
+                pool_mati = True
+
+        if not pool_mati and streams is not None and hasattr(streams, "list_subscribe"):
+            try:
+                subs = await streams.list_subscribe()
+                if isinstance(subs, dict) and "result" in subs:
+                    # bentuk balasan sebenarnya: {"result": [nama, ...], "id": ..}
+                    total = len(subs.get("result") or [])
+                elif isinstance(subs, dict):
+                    total = sum(len(v) for v in subs.values()
+                                if isinstance(v, (list, dict)))
+                else:
+                    total = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"Watchdog: list_subscribe gagal ({exc}) - "
+                               f"anggap semua stream mati, coba pulihkan")
+                total = 0
+
+        if (pool_mati or total == 0) and self._subscribed_symbols:
             logger.error("Semua stream mati! Mencoba berlangganan ulang...")
             try:
+                self._stream_handles.clear()
+                self._clean_stale_global_streams()
+                symbols_to_resub = list(self._subscribed_symbols)
                 await self.subscribe(
-                    self._subscribed_symbols,
-                    on_candle=self._cbs["candle"],
-                    on_trade=self._cbs["trade"],
-                    on_book=self._cbs["book"],
-                    on_ticker=self._cbs["ticker"],
+                    symbols_to_resub,
+                    on_candle=self._cbs.get("candle") or (lambda *a: None),
+                    on_trade=self._cbs.get("trade") or (lambda *a: None),
+                    on_book=self._cbs.get("book") or (lambda *a: None),
+                    on_ticker=self._cbs.get("ticker") or (lambda *a: None),
                     kline_interval=self._kline_interval)
+                self._last_data_ts = time.time()
+                logger.info("Watchdog: pemulihan langganan selesai.")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

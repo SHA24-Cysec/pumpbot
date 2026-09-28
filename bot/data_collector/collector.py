@@ -35,7 +35,19 @@ class DataCollector:
         self.gateway = gateway
         self.buffers: dict[str, SymbolBuffer] = {}
         self.watchlist: list[str] = []
-        self.ws_alive = False
+        self._ws_running = False
+
+    @property
+    def ws_alive(self) -> bool:
+        if not self._ws_running:
+            return False
+        if hasattr(self.gateway, "is_ws_connected"):
+            return bool(self.gateway.is_ws_connected)
+        return True
+
+    @ws_alive.setter
+    def ws_alive(self, val: bool) -> None:
+        self._ws_running = bool(val)
 
     # ------------------------------------------------------------------
     # Pemilihan watchlist

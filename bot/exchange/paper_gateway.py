@@ -212,6 +212,11 @@ class PaperGateway(ExchangeGateway):
         """True bila saldo dibaca dari state tersimpan, bukan saldo awal baru."""
         return self._restored
 
+    @property
+    def is_ws_connected(self) -> bool:
+        """True bila koneksi WebSocket market data aktif."""
+        return getattr(self._market, "is_ws_connected", False)
+
     # ==================================================================
     # LIFECYCLE
     # ==================================================================

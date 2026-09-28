@@ -58,6 +58,8 @@ def test_kanonikalisasi_trail_nol_membuang_beda_trail():
 
 def test_grid_tanpa_duplikat_dan_menghormati_batas_stop(cfg, capsys):
     """sl_pct di luar [min_stop_pct, max_stop_pct] dibuang dengan peringatan."""
+    cfg.stops.min_stop_pct = 0.5
+    cfg.stops.max_stop_pct = 4.0
     grid = build_grid(cfg, [0.1, 1.0, 9.0], DEFAULT_TP_RR, DEFAULT_BE_RR,
                       DEFAULT_BE_BUFFER, DEFAULT_TRAIL)
     out = capsys.readouterr().out

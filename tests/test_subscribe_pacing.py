@@ -245,6 +245,69 @@ class TestWatchdog:
 
 
 
+class TestReconnectImprovements:
+    """Uji perbaikan reconnect: kumulatif simbol, watchdog tunggal, pembersihan stream mati."""
+
+    def test_subscribed_symbols_kumulatif(self):
+        """Simbol dari refresh watchlist ditambahkan secara kumulatif, bukan menimpa."""
+        fs = FakeStreams()
+        gw = _make_gateway(fs)
+        asyncio.run(_subscribe(gw, ["BTCUSDT", "ETHUSDT"]))
+        assert gw._subscribed_symbols == ["BTCUSDT", "ETHUSDT"]
+        asyncio.run(_subscribe(gw, ["SOLUSDT"]))
+        assert gw._subscribed_symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+
+    def test_watchdog_task_tidak_berlipat_ganda(self):
+        """Panggilan subscribe berulang tidak membuat task watchdog baru yang ganda."""
+        fs = FakeStreams()
+        gw = _make_gateway(fs)
+
+        async def run_multiple():
+            await gw.subscribe(["AAAUSDT"], _noop_cb, _noop_cb, _noop_cb, _noop_cb)
+            t1 = gw._watchdog_task
+            await gw.subscribe(["BBBUSDT"], _noop_cb, _noop_cb, _noop_cb, _noop_cb)
+            t2 = gw._watchdog_task
+            assert t1 is t2, "Watchdog task harus tetap sama (tidak dibuat ganda)"
+            _cancel_wd(gw)
+
+        asyncio.run(run_multiple())
+
+    def test_clean_stale_global_streams(self):
+        """Stream map SDK yang menunjuk ke koneksi mati/tidak aktif dibersihkan."""
+        try:
+            from binance_common.websocket import global_stream_connections, WebSocketConnection
+        except ImportError:
+            pytest.skip("binance_common tidak tersedia")
+
+        fs = FakeStreams()
+        gw = _make_gateway(fs)
+        dummy_conn = types.SimpleNamespace(id="dead_conn", is_open=False, websocket=types.SimpleNamespace(closed=True))
+        global_stream_connections.stream_connections_map["dead_stream@kline_1m"] = dummy_conn
+
+        gw._clean_stale_global_streams()
+        assert "dead_stream@kline_1m" not in global_stream_connections.stream_connections_map
+
+    def test_is_ws_connected_status(self):
+        """Property is_ws_connected merefleksikan status koneksi dengan benar."""
+        fs = FakeStreams()
+        gw = _make_gateway(fs)
+        assert gw.is_ws_connected is False
+
+        # Simulasi koneksi SDK aktif
+        conn = types.SimpleNamespace(id="c1", is_open=True, reconnect=False)
+        fs.connections = [conn]
+        assert gw.is_ws_connected is True
+
+        # Saat sedang reconnecting -> False
+        conn.reconnect = True
+        assert gw.is_ws_connected is False
+
+        # Saat closed -> False
+        conn.reconnect = False
+        conn.is_open = False
+        assert gw.is_ws_connected is False
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()
