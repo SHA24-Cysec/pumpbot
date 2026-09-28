@@ -510,7 +510,7 @@ def test_atexit_dipasang_saat_job_jalan_dan_dilepas_setelah_selesai(monkeypatch)
 
     async def skenario():
         # parameter sengaja tidak sah supaya proses anak berhenti cepat
-        await m.start({"interval": "1h"})
+        await m.start({"interval": "7m"})
         assert br._bunuh_paksa in dipasang, "atexit tidak dipasang saat start"
         await m._task
 
@@ -524,7 +524,7 @@ def test_job_nyata_melaporkan_error_parameter_lewat_ndjson():
     m = BacktestManager(python_exe=sys.executable)
 
     async def skenario():
-        await m.start({"interval": "1h"})
+        await m.start({"interval": "7m"})
         await m._task
 
     jalankan(skenario())

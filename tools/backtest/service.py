@@ -53,6 +53,7 @@ from tools.backtest.optimize import (
     DEFAULT_TP_RR,
     DEFAULT_TRAIL,
     SignalParams,
+    _expand_range_token,
     build_grid,
     build_signal_grid,
     load_data,
@@ -67,20 +68,20 @@ from tools.backtest.signals import Entry, scan_all
 from tools.backtest.util import load_backtest_config
 
 # ---------------------------------------------------------------------------
-# Batas pengaman
+# Kebijakan validasi
+#
+# Sesuai permintaan pemilik bot, TIDAK ADA lagi batas strategi seperti batas
+# jumlah simbol, panjang data, kombinasi sinyal, atau total kombinasi.
+# Angka berapa pun diterima selama bermakna secara teknis. Yang tetap
+# ditolak (dengan pesan error yang jelas) hanyalah nilai yang mustahil
+# dipakai: jumlah simbol 0, modal <= 0, porsi out of sample di luar 0..1,
+# jumlah bobot skor <= 0, interval yang bukan interval Binance, langkah
+# rentang nol, dan rentang yang meledak menjadi jutaan nilai (salah ketik).
+#
+# Konsekuensi wajar atas kebebasan ini: job besar memakan CPU dan waktu
+# sesuai ukurannya. Estimasi jumlah kombinasi tetap ditampilkan di
+# dashboard sebelum tombol jalankan ditekan.
 # ---------------------------------------------------------------------------
-
-# Tiap kombinasi sinyal memicu SATU scan penuh atas seluruh simbol, jadi ini
-# bagian termahal dan wajib dibatasi ketat.
-MAX_SIGNAL_COMBOS = 64
-
-# Total baris hasil = kombinasi sinyal x kombinasi exit.
-MAX_TOTAL_ROWS = 200_000
-
-# Batas wajar permintaan data supaya dashboard tidak dipakai menarik data
-# berbulan-bulan tanpa sadar.
-MAX_SYMBOLS = 60
-MAX_DAYS = 180
 
 # Jeda minimum antar event progress sejenis (detik) agar pipa stdout tidak
 # dibanjiri puluhan ribu baris saat mengunduh.
@@ -188,7 +189,13 @@ class _Throttle:
 # ---------------------------------------------------------------------------
 
 def _as_float_list(value: Any, fallback: list[float]) -> list[float]:
-    """Normalisasi daftar angka dari JSON atau teks dipisah koma."""
+    """Normalisasi daftar angka dari JSON atau teks dipisah koma.
+
+    Tiap suku boleh berupa angka tunggal atau rentang otomatis
+    'awal..akhir' / 'awal..akhir:langkah' (contoh '0.5..2.0:0.25').
+    Rentang yang salah format melempar ValueError supaya kesalahan ketik
+    terdengar keras, bukan tenggelam diam-diam.
+    """
     if value is None or value == "" or value == []:
         return list(fallback)
     if isinstance(value, str):
@@ -201,8 +208,16 @@ def _as_float_list(value: Any, fallback: list[float]) -> list[float]:
     for c in chunks:
         if c is None or c == "":
             continue
+        teks = str(c).strip()
+        if not teks:
+            continue
+        if ".." in teks:
+            # Token rentang: salah format harus terdengar keras,
+            # bukan tenggelam diam-diam seperti nilai non-angka biasa.
+            out.extend(_expand_range_token(teks))
+            continue
         try:
-            out.append(float(c))
+            out.append(float(teks))
         except (TypeError, ValueError):
             continue
     return out or list(fallback)
@@ -228,6 +243,42 @@ def _as_symbols(value: Any) -> list[str]:
         if s and s not in out:
             out.append(s)
     return out
+
+
+def _int_wajib(raw: dict, nama: str, default: int, minimal: int) -> int:
+    """Ambil bilangan bulat dari permintaan; tolak nilai mustahil dengan jelas.
+
+    Tidak ada batas atas: angka berapa pun di atas `minimal` diterima.
+    """
+    v = raw.get(nama)
+    if v is None or v == "":
+        return default
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{nama}' harus berupa angka, dapat: {v!r}")
+    if not math.isfinite(f):
+        raise ValueError(f"'{nama}' harus angka hingga, dapat: {v!r}")
+    n = int(round(f))
+    if abs(f - n) > 1e-9:
+        raise ValueError(f"'{nama}' harus bilangan bulat, dapat: {v!r}")
+    if n < minimal:
+        raise ValueError(f"'{nama}' minimal {minimal}, dapat: {n}")
+    return n
+
+
+def _float_wajib(raw: dict, nama: str, default: float) -> float:
+    """Ambil bilangan desimal dari permintaan; wajib angka hingga."""
+    v = raw.get(nama)
+    if v is None or v == "":
+        return default
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{nama}' harus berupa angka, dapat: {v!r}")
+    if not math.isfinite(f):
+        raise ValueError(f"'{nama}' harus angka hingga, dapat: {v!r}")
+    return f
 
 
 @dataclass
@@ -277,13 +328,18 @@ class JobRequest:
 
     @classmethod
     def from_dict(cls, raw: dict) -> "JobRequest":
-        """Bangun permintaan dari dict JSON, dengan validasi batas aman."""
+        """Bangun permintaan dari dict JSON.
+
+        Tidak ada batas atas pada angka; yang ditolak hanyalah nilai yang
+        mustahil dipakai (lihat kebijakan validasi di atas modul ini), dan
+        penolakannya selalu berupa ValueError berpesan jelas.
+        """
         raw = dict(raw or {})
         req = cls()
 
         req.symbols = _as_symbols(raw.get("symbols"))
-        req.top = max(1, min(MAX_SYMBOLS, int(raw.get("top") or 15)))
-        req.days = max(1, min(MAX_DAYS, int(raw.get("days") or 30)))
+        req.top = _int_wajib(raw, "top", 15, 1)
+        req.days = _int_wajib(raw, "days", 30, 1)
 
         interval = str(raw.get("interval") or "1m")
         if interval not in INTERVAL_MS:
@@ -295,26 +351,33 @@ class JobRequest:
         req.download = bool(raw.get("download", True))
         req.data_dir = str(raw.get("data_dir") or DATA_DIR)
 
-        oos = float(raw.get("oos", 0.3) or 0.0)
-        req.oos = oos if 0.0 <= oos < 1.0 else 0.3
+        req.oos = _float_wajib(raw, "oos", 0.3)
+        if not (0.0 <= req.oos < 1.0):
+            raise ValueError(
+                f"'oos' (porsi out of sample) harus di antara 0 (inklusif) "
+                f"dan 1 (eksklusif), dapat: {req.oos}")
 
-        cpu = os.cpu_count() or 1
-        req.workers = max(1, min(int(raw.get("workers") or 1), cpu * 2))
-        req.min_trades = max(0, int(raw.get("min_trades", 30) or 0))
+        req.workers = _int_wajib(raw, "workers", 1, 1)
+        req.min_trades = _int_wajib(raw, "min_trades", 30, 0)
 
-        equity = float(raw.get("equity") or 1000.0)
-        req.equity = equity if equity > 0 else 1000.0
+        req.equity = _float_wajib(raw, "equity", 1000.0)
+        if req.equity <= 0:
+            raise ValueError(
+                f"'equity' (modal simulasi) harus lebih besar dari 0, "
+                f"dapat: {req.equity}")
 
         rp = raw.get("risk_pct")
         req.risk_pct = float(rp) if rp not in (None, "", 0) else None
 
-        req.w_pnl = float(raw.get("w_pnl", 0.4) or 0.0)
-        req.w_pf = float(raw.get("w_pf", 0.3) or 0.0)
-        req.w_dd = float(raw.get("w_dd", 0.3) or 0.0)
+        req.w_pnl = _float_wajib(raw, "w_pnl", 0.4)
+        req.w_pf = _float_wajib(raw, "w_pf", 0.3)
+        req.w_dd = _float_wajib(raw, "w_dd", 0.3)
         if req.w_pnl + req.w_pf + req.w_dd <= 0:
-            req.w_pnl, req.w_pf, req.w_dd = 0.4, 0.3, 0.3
+            raise ValueError(
+                "jumlah bobot skor (w_pnl + w_pf + w_dd) harus lebih besar "
+                f"dari 0, dapat: {req.w_pnl} + {req.w_pf} + {req.w_dd}")
 
-        req.top_rows = max(1, min(200, int(raw.get("top_rows") or 15)))
+        req.top_rows = _int_wajib(raw, "top_rows", 15, 1)
 
         req.sl = _as_float_list(raw.get("sl"), DEFAULT_SL)
         req.tp = _as_float_list(raw.get("tp"), DEFAULT_TP_RR)
@@ -456,13 +519,13 @@ def row_payload(rank: int, r: dict, oos_map: dict, cfg) -> dict:
 def _resolve_symbols(req: JobRequest, cfg, emit: Emitter) -> list[str]:
     """Tentukan daftar simbol: manual dari user atau otomatis top volume."""
     if req.symbols:
-        return req.symbols[:MAX_SYMBOLS]
+        return list(req.symbols)
     emit("log", text=f"Mengambil {req.top} simbol volume tertinggi "
                      f"dari Binance publik ...")
     syms = top_symbols(req.top, cfg, cfg.quote_asset)
     if not syms:
         raise DownloadError("Tidak ada simbol yang lolos filter universe.")
-    return syms[:MAX_SYMBOLS]
+    return syms
 
 
 def _do_download(req: JobRequest, symbols: list[str], emit: Emitter,
@@ -534,12 +597,6 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
         raise ValueError("Grid sinyal kosong setelah validasi. "
                          "Pastikan rasio bobot price action ada di antara "
                          "0 dan 1.")
-    if len(signal_grid) > MAX_SIGNAL_COMBOS:
-        raise ValueError(
-            f"Kombinasi sinyal {len(signal_grid)} melebihi batas aman "
-            f"{MAX_SIGNAL_COMBOS}. Tiap kombinasi sinyal memicu satu "
-            f"pemindaian penuh atas semua simbol, jadi persempit dulu "
-            f"daftar threshold atau rasio bobotnya.")
 
     exit_grid = build_grid(
         cfg, req.sl, req.tp, req.be, req.be_buffer, req.trail,
@@ -550,13 +607,8 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
             f"luar batas config [{cfg.stops.min_stop_pct}, "
             f"{cfg.stops.max_stop_pct}].")
 
-    total_rows = len(signal_grid) * len(exit_grid)
-    if total_rows > MAX_TOTAL_ROWS:
-        raise ValueError(
-            f"Total kombinasi {total_rows:,} melebihi batas aman "
-            f"{MAX_TOTAL_ROWS:,}. Kurangi jumlah nilai pada grid.")
-
     symbols = _resolve_symbols(req, cfg, emit)
+    total_rows = len(signal_grid) * len(exit_grid)
     emit("plan", n_signal=len(signal_grid), n_exit=len(exit_grid),
          total=total_rows, symbols=symbols,
          vwap=bool(cfg.signal.vwap.enabled))

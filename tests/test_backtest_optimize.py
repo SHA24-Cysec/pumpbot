@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import pytest
@@ -81,6 +82,29 @@ def test_parse_floats():
     assert parse_floats("0.5,1,1.5", [9.0]) == [0.5, 1.0, 1.5]
     assert parse_floats("", [9.0]) == [9.0]
     assert parse_floats("abc", [9.0]) == [9.0]
+
+
+def test_parse_floats_rentang_otomatis():
+    """Suku 'awal..akhir:langkah' diperluas menjadi daftar lengkap."""
+    assert parse_floats("0.5..2.0:0.25", []) == \
+        [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    assert parse_floats("1..5", []) == [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert parse_floats("2..1:0.5", []) == [2.0, 1.5, 1.0]
+    assert parse_floats("0.5,2..3:0.5,5", []) == [0.5, 2.0, 2.5, 3.0, 5.0]
+    # cacat float 0.1+2*0.05 tidak boleh bocor ke daftar
+    assert parse_floats("0.1..0.3:0.05", []) == [0.1, 0.15, 0.2, 0.25, 0.3]
+
+
+def test_parse_floats_rentang_salah_ditolak():
+    """Rentang salah format dan langkah nol harus error keras, bukan skip."""
+    import pytest as _pytest
+    for tolakan in ("0.5..abc:1", "1...5"):
+        with _pytest.raises(ValueError, match="[Rr]entang"):
+            parse_floats(tolakan, [])
+    with _pytest.raises(ValueError, match="nol"):
+        parse_floats("1..5:0", [])
+    with _pytest.raises(ValueError, match="10,000"):
+        parse_floats("0..1000000:0.001", [])
 
 
 # --------------------------------------------------------------------------
@@ -272,6 +296,7 @@ def test_parse_ints(capsys):
     assert parse_ints("", [20]) == [20]
     assert parse_ints("10, 20, x, 30", [20]) == [10, 20, 30]
     assert "bukan angka" in capsys.readouterr().out
+    assert parse_ints("10..30:10", []) == [10, 20, 30]
 
 
 def test_csv_memuat_kolom_sinyal(tmp_path):

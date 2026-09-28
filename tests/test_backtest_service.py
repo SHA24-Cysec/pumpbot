@@ -9,7 +9,9 @@ Yang dijaga:
   * aliran NDJSON tetap JSON yang sah (tidak boleh ada Infinity atau NaN,
     karena JSON.parse di browser akan gagal),
   * print() dari modul lama tidak boleh mencemari aliran NDJSON,
-  * batas pengaman grid benar-benar menolak permintaan yang kelewat besar,
+  * angka berapa pun diterima tanpa batas atas; hanya nilai yang mustahil
+    (jumlah simbol 0, modal <= 0, oos di luar 0..1, dst.) yang ditolak
+    dengan pesan error yang jelas,
   * satu putaran optimasi penuh menghasilkan struktur hasil yang dipakai UI.
 """
 
@@ -78,7 +80,7 @@ def cache(tmp_path):
 
 def jalankan(cache_dir, tmp_path, **override):
     """Jalankan satu job offline dan kembalikan daftar event."""
-    dasar = dict(symbols="AAAUSDT,BBBUSDT", days=0, download=False,
+    dasar = dict(symbols="AAAUSDT,BBBUSDT", days=1, download=False,
                  data_dir=cache_dir, config=CONFIG,
                  results=str(tmp_path / "hasil.csv"),
                  min_trades=1, oos=0.3, thr="20,30", wpa="0.6",
@@ -134,32 +136,55 @@ def test_normalisasi_simbol(masuk, harap):
     assert svc._as_symbols(masuk) == harap
 
 
-def test_batas_atas_dipaksa():
-    r = svc.JobRequest.from_dict({"top": 9999, "days": 9999, "top_rows": 9999})
-    assert r.top == svc.MAX_SYMBOLS
-    assert r.days == svc.MAX_DAYS
-    assert r.top_rows == 200
+def test_angka_besar_diterima_apa_adanya():
+    """Tidak ada lagi batas atas: 9999 hari / simbol / workers diterima."""
+    r = svc.JobRequest.from_dict({"top": 9999, "days": 9999, "top_rows": 9999,
+                                  "workers": 10_000, "min_trades": 500})
+    assert r.top == 9999
+    assert r.days == 9999
+    assert r.top_rows == 9999
+    assert r.workers == 10_000
+    assert r.min_trades == 500
 
 
-def test_workers_dibatasi_jumlah_cpu():
+def test_workers_tidak_dibatasi_jumlah_cpu():
+    """Jumlah proses paralel diputuskan pemakai, bukan dipaksa CPU."""
     r = svc.JobRequest.from_dict({"workers": 10_000})
-    assert 1 <= r.workers <= (os.cpu_count() or 1) * 2
+    assert r.workers == 10_000
 
 
-def test_oos_di_luar_rentang_kembali_ke_default():
-    assert svc.JobRequest.from_dict({"oos": 1.5}).oos == 0.3
-    assert svc.JobRequest.from_dict({"oos": -1}).oos == 0.3
-    assert svc.JobRequest.from_dict({"oos": 0.0}).oos == 0.0
+def test_nilai_mustahil_ditolak_dengan_pesan_jelas():
+    for bad, pesan in [
+        ({"top": 0}, "top"),
+        ({"days": 0}, "days"),
+        ({"workers": 0}, "workers"),
+        ({"top_rows": 0}, "top_rows"),
+        ({"equity": 0}, "equity"),
+        ({"equity": -5}, "equity"),
+        ({"oos": 1.5}, "out of sample"),
+        ({"oos": -1}, "out of sample"),
+        ({"w_pnl": 0, "w_pf": 0, "w_dd": 0}, "bobot"),
+    ]:
+        with pytest.raises(ValueError, match=pesan):
+            svc.JobRequest.from_dict(bad)
 
 
-def test_bobot_nol_semua_kembali_ke_default():
-    r = svc.JobRequest.from_dict({"w_pnl": 0, "w_pf": 0, "w_dd": 0})
-    assert (r.w_pnl, r.w_pf, r.w_dd) == (0.4, 0.3, 0.3)
+def test_nilai_di_batas_teknis_tetap_sah():
+    r = svc.JobRequest.from_dict({"oos": 0.0, "equity": 0.01,
+                                  "min_trades": 0})
+    assert r.oos == 0.0
+    assert r.equity == 0.01
+    assert r.min_trades == 0
+
+
+def test_interval_baru_diterima():
+    for itv in ("15m", "30m", "1h", "4h", "1d"):
+        assert svc.JobRequest.from_dict({"interval": itv}).interval == itv
 
 
 def test_interval_tidak_didukung_ditolak():
     with pytest.raises(ValueError, match="tidak didukung"):
-        svc.JobRequest.from_dict({"interval": "1h"})
+        svc.JobRequest.from_dict({"interval": "7m"})
 
 
 def test_vwap_tidak_sah_ditolak():
@@ -167,11 +192,42 @@ def test_vwap_tidak_sah_ditolak():
         svc.JobRequest.from_dict({"vwap": "kadang"})
 
 
-def test_simbol_dibatasi_maksimum():
+def test_simbol_tidak_dipotong():
+    """Daftar simbol manual diterima utuh berapa pun panjangnya."""
     banyak = ",".join(f"S{i}USDT" for i in range(200))
-    assert len(svc.JobRequest.from_dict({"symbols": banyak}).symbols) <= 200
-    # pemotongan sesungguhnya terjadi saat resolve, batasnya MAX_SYMBOLS
-    assert svc.MAX_SYMBOLS == 60
+    assert len(svc.JobRequest.from_dict({"symbols": banyak}).symbols) == 200
+
+
+# ---------------------------------------------------------------------------
+# Syntax rentang otomatis: awal..akhir atau awal..akhir:langkah
+# ---------------------------------------------------------------------------
+
+def test_rentang_diperluas_menjadi_daftar():
+    assert svc._as_float_list("0.5..2.0:0.25", []) == \
+        [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    assert svc._as_float_list("1..5", []) == [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert svc._as_float_list("2..1:0.5", []) == [2.0, 1.5, 1.0]
+    assert svc._as_float_list("0.5,2..3:0.5,5", []) == [0.5, 2.0, 2.5, 3.0, 5.0]
+    assert svc._as_float_list("0.1..0.3:0.05", []) == [0.1, 0.15, 0.2, 0.25, 0.3]
+    assert svc._as_int_list("10..30:10", []) == [10, 20, 30]
+
+
+def test_rentang_salah_format_ditolak_jelas():
+    for tolakan in ("0.5..abc:1", "1...5", "1..5:0"):
+        with pytest.raises(ValueError, match="[Rr]entang"):
+            svc._as_float_list(tolakan, [])
+
+
+def test_rentang_meledak_ditolak():
+    """Rentang salah ketik yang menghasilkan jutaan nilai harus terdengar."""
+    with pytest.raises(ValueError, match="10,000"):
+        svc._as_float_list("0..1000000:0.001", [])
+
+
+def test_rentang_bisa_dari_job_json():
+    r = svc.JobRequest.from_dict({"sl": "1..3:0.5", "thr": "40..60:10"})
+    assert r.sl == [1.0, 1.5, 2.0, 2.5, 3.0]
+    assert r.thr == [40.0, 50.0, 60.0]
 
 
 # ---------------------------------------------------------------------------
@@ -318,11 +374,15 @@ def test_metrics_payload_menangani_profit_factor_tak_hingga():
 # Batas pengaman
 # ---------------------------------------------------------------------------
 
-def test_kombinasi_sinyal_berlebihan_ditolak(cache, tmp_path):
-    with pytest.raises(ValueError, match="melebihi batas aman"):
-        jalankan(cache, tmp_path, thr="10,20,30,40,50",
-                 wpa="0.1,0.2,0.3,0.4,0.5", ma_period="10,20,30",
-                 structure="20,30")
+def test_kombinasi_sinyal_besar_tetap_dijalankan(cache, tmp_path):
+    """Grid melebihi batas lama 64 kombinasi sinyal kini boleh dijalankan."""
+    rc, ev = jalankan(cache, tmp_path, thr="10,20,30,40,50",
+                      wpa="0.1,0.2,0.3,0.4,0.5", ma_period="10,20,30",
+                      structure="20,30")
+    assert rc == 0
+    assert ambil(ev, "done")
+    plan = ambil(ev, "plan")[0]
+    assert plan["n_signal"] == 150      # 5 thr x 5 wpa x 3 ma x 2 struktur
 
 
 def test_grid_sinyal_kosong_ditolak(cache, tmp_path):
@@ -471,7 +531,7 @@ def test_cli_job_rusak_melapor_error(tmp_path, capsys):
 
 def test_cli_parameter_tidak_sah_melapor_error(tmp_path, capsys):
     p = tmp_path / "job.json"
-    p.write_text(json.dumps({"interval": "1h"}), encoding="utf-8")
+    p.write_text(json.dumps({"interval": "7m"}), encoding="utf-8")
     rc = svc.main(["--job", str(p)])
     assert rc == 1
     baris = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines()]
@@ -482,7 +542,7 @@ def test_cli_parameter_tidak_sah_melapor_error(tmp_path, capsys):
 def test_cli_keluaran_selalu_ndjson_sah(cache, tmp_path, capsys):
     p = tmp_path / "job.json"
     p.write_text(json.dumps({
-        "symbols": "AAAUSDT,BBBUSDT", "days": 0, "download": False,
+        "symbols": "AAAUSDT,BBBUSDT", "days": 1, "download": False,
         "data_dir": cache, "config": CONFIG,
         "results": str(tmp_path / "r.csv"),
         "min_trades": 1, "thr": "20", "wpa": "0.6", "sl": "1.0",

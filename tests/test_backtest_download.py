@@ -15,9 +15,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.backtest import download                              # noqa: E402
 from tools.backtest.download import (                            # noqa: E402
-    DownloadError, HttpResult, count_gaps, download_symbol, fetch_klines,
-    is_tradeable_symbol, merge_rows, normalize_ts, parse_kline_row, read_csv,
-    top_symbols, write_csv)
+    DownloadError, HttpResult, INTERVAL_MS, count_gaps, download_symbol,
+    fetch_klines, is_tradeable_symbol, merge_rows, normalize_ts,
+    parse_kline_row, read_csv, top_symbols, write_csv)
 from tools.backtest.util import load_backtest_config             # noqa: E402
 
 T0 = 1_700_000_000_000
@@ -125,7 +125,13 @@ def test_candle_belum_close_dibuang():
 def test_interval_tidak_didukung():
     """Interval di luar daftar harus gagal cepat."""
     with pytest.raises(DownloadError):
-        fetch_klines("AAAUSDT", "1h", T0, T0 + MIN, fetcher=lambda *a, **k: None)
+        fetch_klines("AAAUSDT", "7m", T0, T0 + MIN, fetcher=lambda *a, **k: None)
+
+
+def test_interval_panjang_kini_didukung():
+    """Interval 15m..1d resmi didukung sejak patch input fleksibel."""
+    for itv in ("15m", "30m", "1h", "4h", "1d"):
+        assert itv in INTERVAL_MS
 
 
 # --------------------------------------------------------------------------

@@ -104,7 +104,7 @@ data:
 signal:
   # Skor gabungan minimum (0-100) sebelum bot boleh entry.
   # 70 = cukup selektif. Turunkan (60) untuk lebih banyak sinyal.
-  score_threshold: 70.0
+  score_threshold: 70
 
   # Setelah exit, simbol ini "dinginkan" dulu selama X menit
   # supaya tidak langsung masuk lagi di kondisi yang sama.
@@ -122,9 +122,9 @@ signal:
   weights:
     orderbook: 0.20       # ketimpangan bid/ask + deteksi wall
     trade_flow: 0.15      # lonjakan frekuensi trade + tekanan beli
-    volume: 0.4          # lonjakan volume vs moving average
+    volume: 0.30          # lonjakan volume vs moving average
     whale: 0.15           # transaksi bandar + deteksi spoofing
-    price_action: 0.6    # struktur tren, breakout, fibonacci (SINYAL UTAMA)
+    price_action: 0.70    # struktur tren, breakout, fibonacci (SINYAL UTAMA)
 
   # ------------------- DETEKSI MANIPULASI (filter negatif) -------------------
   manipulation:
@@ -276,7 +276,7 @@ stops:
   # Default SL tetap 1% di bawah entry. Mode structure tetap tersedia bila
   # diperlukan, tetapi contoh strategi 1:2 menggunakan mode percent.
   mode: percent
-  percent_pct: 6.0
+  percent_pct: 3.0
   structure_buffer_pct: 0.15
   min_stop_pct: 0.5
   max_stop_pct: 10.0
@@ -284,20 +284,20 @@ stops:
 take_profit:
   # Satu TP berbasis risk:reward. rr 2 + SL 1% = TP 2% (1:2).
   mode: rr
-  rr: 3.0
+  rr: 4.0
 
 breakeven:
   enabled: true
   # BE saat +1R, yaitu entry + 1 x jarak SL awal. Dengan TP 2R, BE aktif
   # sebelum TP apa pun jarak SL yang digunakan.
-  trigger_rr: 0.75
+  trigger_rr: 0.5
   # Buffer minimal 2x fee tetap dipakai agar BE tidak rugi karena biaya.
-  buffer_pct: 0.2
+  buffer_pct: 0.3
 
 trailing:
   # Aktif otomatis segera setelah BE; SL mengikuti harga tertinggi dengan
   # jarak percent_pct. (Fitur ATR trailing sudah dihapus dari bot.)
-  enabled: true
+  enabled: false
   percent_pct: 0.5
   update_step_pct: 0.15
 

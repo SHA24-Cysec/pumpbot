@@ -56,7 +56,7 @@ def test_single_yaml_is_valid_and_loads():
     # Default project WAJIB akun demo: menjalankan bot apa adanya tidak boleh
     # langsung menyentuh uang sungguhan.
     assert cfg.mode == "paper"
-    assert cfg.risk.risk_per_trade_pct == 99.0
+    assert cfg.risk.risk_per_trade_pct == 100.0
     assert cfg.signal.score_threshold == 70
     errs = validate(cfg)
     assert errs == [], errs

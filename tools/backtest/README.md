@@ -28,7 +28,7 @@ Opsi:
 | ------------ | ---------------- | -------------------------------------------- |
 | `--top`      | 30               | jumlah simbol dengan volume 24 jam tertinggi |
 | `--days`     | 30               | panjang riwayat dalam hari                    |
-| `--interval` | 1m               | `1m` atau `5m`                                |
+| `--interval` | 1m               | `1m` `3m` `5m` `15m` `30m` `1h` `2h` `4h` `6h` `8h` `12h` `1d` |
 | `--symbols`  | (kosong)         | daftar simbol manual, melewati filter volume  |
 | `--data-dir` | data/backtest    | lokasi cache CSV                              |
 | `--no-progress` | mati          | paksa log baris biasa (tanpa animasi)      |
@@ -77,6 +77,11 @@ Opsi penting:
 | `--no-progress`             | mati    | paksa log baris biasa (tanpa animasi)              |
 | `--w-pnl` `--w-pf` `--w-dd` | 0.4 / 0.3 / 0.3 | bobot skor gabungan                        |
 | `--sl` `--tp` `--be` `--be-buffer` `--trail` | grid default | override daftar nilai, dipisah koma |
+
+Semua parameter daftar (`--sl`, `--thr`, dll.) juga menerima rentang otomatis
+`awal..akhir` atau `awal..akhir:langkah`, contoh `--sl 0.5..2.0:0.25` menjadi
+0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0. Rentang menurun seperti `2.0..0.5:0.5`
+sah, dan satu argumen boleh mencampur keduanya: `--thr 35,40..60:5,70`.
 
 Grid default:
 

@@ -162,6 +162,9 @@ pumpbot/
 ## Persyaratan
 
 - Python **3.10+** (diuji pada 3.13)
+- Sistem operasi: **Linux, macOS, dan Windows** (bot, dashboard, dan tools
+  backtest berjalan di ketiganya; di Windows penghentian job backtest
+  memakai `taskkill` karena tidak ada sinyal POSIX)
 - Koneksi internet ke Binance
 - Untuk mode `paper` (akun demo): **tidak perlu API key sama sekali**
 - Untuk mode `live`: API key Binance dengan izin Spot Trading
@@ -181,7 +184,8 @@ source .venv/bin/activate          # Linux/macOS
 pip install -r requirements.txt
 
 # 4. (opsional) siapkan .env - hanya perlu diisi kalau nanti pakai mode live
-cp .env.example .env
+cp env.example .env              # Linux/macOS
+# copy env.example .env          # Windows CMD
 ```
 
 PumpBot hanya memakai **`config/config.yaml`**. File tersebut sudah tersedia
@@ -305,7 +309,7 @@ mode: paper    # pilihan: paper | live
   key. Mulai dari sini dan bertahanlah di sini sampai hasilnya konsisten.
 - `live` - **uang sungguhan**: butuh API key di `.env`.
 
-Badge di pojok kiri dashboard menunjukkan mode aktif: **hijau `PAPER · AKUN
+Bad
 DEMO`** berarti aman, **merah `LIVE`** berarti setiap order memakai uang Anda.
 
 Berhenti: `Ctrl+C` (shutdown rapi; posisi & OCO yang masih terbuka **tetap hidup
@@ -353,14 +357,20 @@ data lebih dulu secara manual.
 1. **Pause bot.** Tombol *Jalankan* baru aktif setelah bot di-pause. Ini
    disengaja: backtest memakai beberapa inti CPU, dan bot yang sedang memantau
    pasar tidak boleh kalah cepat gara-gara CPU terpakai habis.
-2. **Isi form.** Simbol, jumlah hari, interval candle, porsi data
-   *out-of-sample*, jumlah worker, lalu daftar nilai yang ingin dicoba untuk
-   SL, TP (dalam R), breakeven, buffer breakeven, trailing, dan cooldown.
-   Semua daftar dipisah koma, contoh `0.5, 0.75, 1.0, 1.5`.
+2. **Isi form.** Simbol, jumlah hari, interval candle (1m sampai 1d), porsi
+   data *out-of-sample*, jumlah worker, lalu daftar nilai yang ingin dicoba
+   untuk SL, TP (dalam R), breakeven, buffer breakeven, trailing, dan
+   cooldown. Semua angka bebas diisi berapa pun tanpa batas atas. Daftar
+   nilai dipisah koma, contoh `0.5, 0.75, 1.0, 1.5`, atau pakai rentang
+   otomatis `awal..akhir:langkah`, contoh `0.5..2.0:0.25` yang menjadi
+   0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0. Rentang menurun seperti
+   `2.0..0.5:0.5` juga sah.
 3. **Perhatikan estimasi.** Di bawah form ada penghitung yang menampilkan
    jumlah kombinasi yang akan diuji, dihitung ulang setiap kali Anda mengetik.
    Kombinasi kembar otomatis dibuang (misalnya saat breakeven mati, nilai
-   buffer tidak lagi berpengaruh sehingga tidak diuji berulang).
+   buffer tidak lagi berpengaruh sehingga tidak diuji berulang). Nilai SL
+   di luar rentang `min_stop_pct` sampai `max_stop_pct` milik config.yaml
+   ikut ditandai di situ karena dibuang dari grid.
 4. **Jalankan.** Progress bar menampilkan fase yang sedang berjalan:
    persiapan, unduh, muat data, pindai sinyal, grid exit, uji out-of-sample,
    selesai. Log mentah bisa dibuka lewat *Lihat log*. Tombol *Batalkan*
@@ -369,7 +379,13 @@ data lebih dulu secara manual.
    out-of-sample: jumlah trade, win rate, return bersih, profit factor, max
    drawdown, rata-rata R, dan expectancy. Kombinasi dengan jumlah trade di
    bawah *Minimal trade* ditandai diskualifikasi supaya hasil kebetulan dari
-   dua-tiga trade tidak naik ke puncak.
+   dua-tiga trade tidak naik ke puncak. Seluruh kolom angka (termasuk kolom
+   out-of-sample) bisa diurutkan dengan mengklik judul kolomnya: klik
+   pertama urut kecil ke besar, klik kedua besar ke kecil, klik ketiga
+   kembali ke peringkat skor. Kolom `#` selalu menomori ulang 1..N sesuai
+   urutan tampilan terakhir, sedangkan peringkat skor asli tetap dipakai
+   untuk pratinjau YAML dan penerapan ke config. Baris dengan nilai kosong
+   (skor diskualifikasi, OOS tidak tersedia) selalu berada di paling bawah.
 6. **Terapkan.** Tombol *Terapkan ke config* pada baris pilihan Anda menulis
    parameter tersebut ke `config/config.yaml`. Ada pratinjau dulu sebelum
    file benar-benar diubah.
@@ -593,6 +609,13 @@ Urutan ringkas untuk entry 100, SL 99 dan TP 102:
 1. Harga mencapai 101 (+1R) → SL pindah ke sekitar BE dan trailing diaktifkan.
 2. Harga mencetak high baru → SL mengikuti `highest × (1 − 0,5%)`.
 3. Harga mencapai 102 → TP terisi; jika harga berbalik lebih dahulu, SL BE atau
+   trailing yang menan.
+
+Urutan ringkas untuk entry 100, SL 99 dan TP 102:
+
+1. Harga mencapai 101 (+1R) → SL pindah ke sekitar BE dan trailing diaktifkan.
+2. Harga mencetak high baru → SL mengikuti `highest × (1 − 0,5%)`.
+3. Harga mencapai 102 → TP terisi; jika harga berbalik lebih dahulu, SL BE atau
    trailing yang menutup posisi.
 
 > Tetap uji dalam mode `paper` sebelum memakai dana riil. Gap,
@@ -734,4 +757,6 @@ atau di-rename menjadi `data/pumpbot-paper.db` bila ingin dipertahankan - tapi i
 
 **Terakhir**: ujilah di akun demo minimal beberapa minggu, pahami setiap
 parameter sebelum mengubahnya, dan jangan pernah masuk mode `live` dengan
+parameter yang belum Anda pahami sepenuhnya. Selamat menguji! 🚀
+engan
 parameter yang belum Anda pahami sepenuhnya. Selamat menguji! 🚀

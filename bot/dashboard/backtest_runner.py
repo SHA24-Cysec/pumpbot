@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -34,6 +35,35 @@ MAX_LOG_LINES = 600
 
 # Waktu tunggu setelah SIGTERM sebelum proses dipaksa mati.
 KILL_GRACE_S = 5.0
+
+# ---------------------------------------------------------------------------
+# Kompatibilitas lintas platform (Linux / macOS / Windows)
+#
+# Modul ini semula memakai API yang HANYA ada di POSIX:
+#   * os.killpg / os.getpgid / os.waitpid + os.WNOHANG
+#   * signal.SIGKILL
+#   * start_new_session=True (diabaikan diam-diam oleh subprocess Windows)
+# Di Windows tidak ada sinyal POSIX: proses dihentikan lewat TerminateProcess
+# dan satu POHON proses dimatikan sekaligus lewat "taskkill /T /F". Seluruh
+# percabangan platform dipusatkan pada konstanta di bawah agar jalur utama
+# tetap identik di semua OS.
+# ---------------------------------------------------------------------------
+_WINDOWS = sys.platform == "win32"
+
+# SIGKILL tidak ada di Windows; padanannya SIGTERM, karena di Windows
+# penghentian proses memang selalu bersifat memaksa (TerminateProcess).
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+# Kode keluar proses anak yang berarti "dibatalkan lewat sinyal":
+# 128+N sesuai konvensi shell (130=SIGINT, 143=SIGTERM, 137=SIGKILL), atau
+# negatif dari nomor sinyal (konvensi asyncio di POSIX). Di Windows proses
+# yang dimatikan selalu keluar dengan kode positif, sehingga deteksi
+# pembatalan di sana memakai flag BacktestManager._batal_diminta.
+_RC_BATAL = {130, 143, 137}
+if hasattr(signal, "SIGTERM"):
+    _RC_BATAL.add(-signal.SIGTERM)
+if hasattr(signal, "SIGKILL"):
+    _RC_BATAL.add(-signal.SIGKILL)
 
 STATUS_IDLE = "idle"
 STATUS_RUNNING = "running"
@@ -73,6 +103,10 @@ class BacktestManager:
 
         self._logs: list[dict] = []
         self._log_seq: int = 0
+        # True setelah cancel() diminta; dipakai _pantau untuk membedakan
+        # proses yang dibatalkan pengguna dari yang gagal sendiri. Di Windows
+        # kode keluar tidak membedakan keduanya, jadi flag ini wajib.
+        self._batal_diminta: bool = False
 
     # ------------------------------------------------------------------
     # Log
@@ -145,21 +179,31 @@ class BacktestManager:
             self.finished_at = 0
             self._logs = []
             self._log_seq = 0
+            self._batal_diminta = False
             self.status = STATUS_RUNNING
 
             cmd = [self.python_exe, "-u", "-m", "tools.backtest.service",
                    "--job", "-"]
             env = dict(os.environ)
             env.setdefault("PYTHONUNBUFFERED", "1")
+            # Pisahkan anak ke sesi/grup proses sendiri supaya seluruh pohon
+            # proses (termasuk pekerja ProcessPoolExecutor) bisa dimatikan
+            # sekaligus, dan job tidak ikut mati saat bot menerima Ctrl+C.
+            if _WINDOWS:
+                # Padanan setsid() di Windows: memindahkan anak ke grup proses
+                # baru menahan CTRL_C_EVENT konsol bot menyebar ke job.
+                popen_kwargs: dict = {
+                    "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP,
+                }
+            else:
+                popen_kwargs = {"start_new_session": True}
             try:
                 self._proc = await asyncio.create_subprocess_exec(
                     *cmd, cwd=self.cwd, env=env,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    # sesi baru supaya seluruh pohon proses (termasuk pekerja
-                    # ProcessPoolExecutor) bisa dimatikan sekaligus
-                    start_new_session=True,
+                    **popen_kwargs,
                 )
             except OSError as exc:
                 self.status = STATUS_ERROR
@@ -183,12 +227,13 @@ class BacktestManager:
         if self.status != STATUS_RUNNING or proc is None:
             return False
         self._log("Pembatalan diminta pengguna.", "warning")
+        self._batal_diminta = True
         _bunuh_grup(proc, signal.SIGTERM)
         try:
             await asyncio.wait_for(proc.wait(), timeout=KILL_GRACE_S)
         except asyncio.TimeoutError:
             self._log("Proses tidak berhenti, dipaksa mati.", "warning")
-            _bunuh_grup(proc, signal.SIGKILL)
+            _bunuh_grup(proc, _SIGKILL)
         return True
 
     async def shutdown(self) -> None:
@@ -214,7 +259,10 @@ class BacktestManager:
                 proc.stdin.write(json.dumps(request).encode("utf-8"))
                 await proc.stdin.drain()
                 proc.stdin.close()
-        except (BrokenPipeError, ConnectionResetError) as exc:
+        except OSError as exc:
+            # BrokenPipeError/ConnectionResetError adalah turunan OSError;
+            # di Windows pipa yang sudah tertutup bisa memunculkan kode
+            # OSError yang lain, jadi tangkap induknya langsung.
             self._log(f"Gagal mengirim parameter job: {exc}", "error")
 
         tugas = [asyncio.create_task(self._baca_stdout(proc)),
@@ -241,7 +289,7 @@ class BacktestManager:
             pass
         elif rc == 0:
             self.status = STATUS_DONE
-        elif rc in (-signal.SIGTERM, -signal.SIGKILL, 130, 143, 137):
+        elif self._batal_diminta or rc in _RC_BATAL:
             self.status = STATUS_CANCELLED
             self.error = self.error or "Dibatalkan pengguna."
         else:
@@ -338,6 +386,11 @@ def _bunuh_paksa(proc) -> None:
     except Exception:
         return
     _bunuh_grup(proc, signal.SIGTERM)
+    if _WINDOWS:
+        # os.waitpid/os.WNOHANG hanya ada di POSIX; di Windows pemulihan
+        # status proses anak sudah ditangani asyncio, dan taskkill /T
+        # memastikan seluruh pohon proses berhenti.
+        return
     try:
         os.waitpid(proc.pid, os.WNOHANG)
     except (ChildProcessError, OSError):
@@ -345,7 +398,27 @@ def _bunuh_paksa(proc) -> None:
 
 
 def _bunuh_grup(proc, sig: int) -> None:
-    """Kirim sinyal ke seluruh grup proses anak, dengan cadangan per proses."""
+    """Hentikan anak beserta seluruh proses turunannya, lintas platform."""
+    if _WINDOWS:
+        # Tidak ada os.killpg/os.getpgid di Windows. Cara mematikan satu
+        # POHON proses sekaligus di sana adalah:
+        #     taskkill /PID <pid> /T /F
+        # /T = ikutkan seluruh proses turunan (pekerja ProcessPoolExecutor),
+        # /F = paksa berhenti (di Windows memang tidak ada sinyal "sopan").
+        # taskkill mengembalikan kode != 0 bila pid sudah mati; abaikan saja.
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True, timeout=KILL_GRACE_S,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            pass
+        try:
+            proc.send_signal(signal.SIGTERM)  # TerminateProcess bila masih hidup
+        except (ProcessLookupError, ValueError, OSError):
+            pass
+        return
     try:
         os.killpg(os.getpgid(proc.pid), sig)
         return

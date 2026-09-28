@@ -28,6 +28,24 @@ import sys
 CONFIG_PATH = "config/config.yaml"
 
 
+def _siapkan_stderr_windows() -> None:
+    """Cegah UnicodeEncodeError di Windows saat output diarahkan ke file.
+
+    Di Windows, stderr yang dialihkan ke file/pipe (Task Scheduler, layanan,
+    "python run.py > log.txt") memakai encoding lawas seperti cp1252, sehingga
+    pesan log ber-emoji (contoh "❌") bisa gagal di-encode. Mengubah kebijakan
+    error stream menjadi "replace" membuat karakter tersebut sekadar diganti
+    "?" alih-alih melempar exception. Di Linux/macOS fungsi ini no-op.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        if sys.stderr is not None and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(errors="replace")
+    except Exception:
+        pass  # stream tidak bisa direconfigure -> biarkan apa adanya
+
+
 def main(argv=None) -> int:
     # CLI sengaja tidak menyediakan --config / --mode / --simulate; seluruh
     # pilihan strategi dan mode hanya berasal dari config/config.yaml.
@@ -36,6 +54,7 @@ def main(argv=None) -> int:
         description="PumpBot - konfigurasi tunggal di config/config.yaml",
     )
     parser.parse_args(argv)
+    _siapkan_stderr_windows()
     from bot.config import ConfigError, load_config
     from bot.utils import setup_logging
 

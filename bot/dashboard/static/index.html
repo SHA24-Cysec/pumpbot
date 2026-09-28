@@ -304,6 +304,10 @@
   .bt-res tbody tr.sel td{background:rgba(34,211,238,.1);box-shadow:inset 2px 0 0 var(--blue)}
   .bt-res .oos{border-left:2px solid var(--line-strong)}
   .bt-res td.neg,.bt-res td.pos{font-weight:600}
+  .bt-res th[data-k]{cursor:pointer;user-select:none;white-space:nowrap}
+  .bt-res th[data-k]:hover{color:var(--text)}
+  .bt-res th .si{display:inline-block;width:11px;color:var(--blue)}
+  .bt-res th[data-k].aktif{color:var(--blue)}
   .bt-apply{background:rgba(255,255,255,.028);border:1px solid var(--line);
             border-radius:10px;padding:10px 12px;margin-top:12px}
   .bt-chk{display:flex;align-items:flex-start;gap:8px;padding:5px 0;font-size:12.5px}
@@ -458,11 +462,11 @@
         <div class="bt-f col"><label>Simbol (kosongkan = otomatis volume tertinggi)</label>
           <input class="wide" id="bt_symbols" placeholder="BTCUSDT, ETHUSDT, SOLUSDT"></div>
         <div class="bt-f"><label>Jumlah simbol otomatis</label>
-          <input type="number" id="bt_top" value="10" min="1" max="60" step="1"></div>
+          <input type="number" id="bt_top" value="10" min="1" step="1"></div>
         <div class="bt-f"><label>Panjang data (hari)</label>
-          <input type="number" id="bt_days" value="14" min="1" max="180" step="1"></div>
+          <input type="number" id="bt_days" value="14" min="1" step="1"></div>
         <div class="bt-f"><label>Interval candle</label>
-          <select id="bt_interval"><option value="1m">1m</option><option value="5m">5m</option></select></div>
+          <select id="bt_interval"><option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option><option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="2h">2h</option><option value="4h">4h</option><option value="6h">6h</option><option value="8h">8h</option><option value="12h">12h</option><option value="1d">1d</option></select></div>
         <div class="bt-f"><label>Unduh data otomatis</label>
           <input type="checkbox" id="bt_download" checked></div>
       </div>
@@ -470,15 +474,15 @@
       <div class="bt-group">
         <h3>Cara menilai</h3>
         <div class="bt-f"><label>Porsi out of sample</label>
-          <input type="number" id="bt_oos" value="0.3" min="0" max="0.9" step="0.05"></div>
+          <input type="number" id="bt_oos" value="0.3" min="0" max="0.99" step="0.05"></div>
         <div class="bt-f"><label>Proses paralel</label>
-          <input type="number" id="bt_workers" value="2" min="1" max="32" step="1"></div>
+          <input type="number" id="bt_workers" value="2" min="1" step="1"></div>
         <div class="bt-f"><label>Minimal trade</label>
           <input type="number" id="bt_min_trades" value="30" min="0" step="1"></div>
         <div class="bt-f"><label>Modal simulasi</label>
-          <input type="number" id="bt_equity" value="1000" min="1" step="100"></div>
+          <input type="number" id="bt_equity" value="1000" min="0.01" step="any"></div>
         <div class="bt-f"><label>Baris hasil ditampilkan</label>
-          <input type="number" id="bt_top_rows" value="15" min="1" max="200" step="1"></div>
+          <input type="number" id="bt_top_rows" value="15" min="1" step="1"></div>
         <div class="bt-f"><label>Filter Anchored VWAP</label>
           <select id="bt_vwap"><option value="config">ikut config</option>
             <option value="on">paksa aktif</option><option value="off">paksa mati</option></select></div>
@@ -486,6 +490,10 @@
 
       <div class="bt-group">
         <h3>Grid parameter exit</h3>
+        <div class="hint" style="margin-bottom:8px">Isi daftar angka dipisah koma, atau
+          rentang otomatis <b>awal..akhir:langkah</b> (contoh
+          <b>0.5..2.0:0.25</b> menjadi 0.5, 0.75, 1.0, sampai 2.0).
+          Rentang menurun seperti <b>2.0..0.5:0.5</b> juga sah.</div>
         <div class="bt-f col"><label>Stop loss persen</label>
           <input class="wide" id="bt_sl" value="0.5,0.75,1.0,1.5,2.0,3.0"></div>
         <div class="bt-f col"><label>Take profit (kelipatan risiko)</label>
@@ -502,6 +510,8 @@
 
       <div class="bt-group">
         <h3>Grid parameter sinyal</h3>
+        <div class="hint" style="margin-bottom:8px">Sama seperti grid exit: daftar koma
+          atau rentang otomatis, contoh <b>40..60:5</b>.</div>
         <div class="bt-f col"><label>Skor minimum entry</label>
           <input class="wide" id="bt_thr" value="40,50,60"></div>
         <div class="bt-f col"><label>Rasio bobot price action (0 sampai 1)</label>
@@ -523,11 +533,11 @@
       <div class="bt-group">
         <h3>Bobot skor peringkat</h3>
         <div class="bt-f"><label>Bobot imbal hasil</label>
-          <input type="number" id="bt_w_pnl" value="0.4" min="0" max="1" step="0.05"></div>
+          <input type="number" id="bt_w_pnl" value="0.4" min="0" step="0.05"></div>
         <div class="bt-f"><label>Bobot profit factor</label>
-          <input type="number" id="bt_w_pf" value="0.3" min="0" max="1" step="0.05"></div>
+          <input type="number" id="bt_w_pf" value="0.3" min="0" step="0.05"></div>
         <div class="bt-f"><label>Bobot drawdown kecil</label>
-          <input type="number" id="bt_w_dd" value="0.3" min="0" max="1" step="0.05"></div>
+          <input type="number" id="bt_w_dd" value="0.3" min="0" step="0.05"></div>
         <div class="hint">Skor akhir menormalkan ketiga metrik lalu
           menjumlahkannya sesuai bobot. Drawdown dihitung terbalik:
           makin kecil makin bagus.</div>
@@ -558,11 +568,11 @@
       <div class="scroll" style="max-height:min(420px,50vh)">
         <table class="bt-res">
           <thead><tr>
-            <th>#</th><th>THR</th><th>WPA</th><th>SL%</th><th>TP</th><th>BE</th>
-            <th>BUF</th><th>TR%</th><th>CD</th>
-            <th>N</th><th>WIN%</th><th>RET%</th><th>PF</th><th>MDD%</th><th>SKOR</th>
-            <th class="oos">N</th><th class="oos">RET%</th>
-            <th class="oos">PF</th><th class="oos">MDD%</th>
+            <th>#</th><th data-k="thr">THR<span class="si"></span></th><th data-k="wpa">WPA<span class="si"></span></th><th data-k="sl">SL%<span class="si"></span></th><th data-k="tp">TP<span class="si"></span></th><th data-k="be">BE<span class="si"></span></th>
+            <th data-k="buf">BUF<span class="si"></span></th><th data-k="tr">TR%<span class="si"></span></th><th data-k="cd">CD<span class="si"></span></th>
+            <th data-k="n">N<span class="si"></span></th><th data-k="win">WIN%<span class="si"></span></th><th data-k="ret">RET%<span class="si"></span></th><th data-k="pf">PF<span class="si"></span></th><th data-k="mdd">MDD%<span class="si"></span></th><th data-k="skor">SKOR<span class="si"></span></th>
+            <th class="oos" data-k="oos_n">N<span class="si"></span></th><th class="oos" data-k="oos_ret">RET%<span class="si"></span></th>
+            <th class="oos" data-k="oos_pf">PF<span class="si"></span></th><th class="oos" data-k="oos_mdd">MDD%<span class="si"></span></th>
           </tr></thead>
           <tbody id="btRows"></tbody>
         </table>
@@ -1055,16 +1065,15 @@ const BT = {
   sel: 1,             // peringkat yang sedang dipilih
   timer: null,        // handle polling
   status: "idle",
-  awal: {}            // salinan nilai formulir untuk tombol reset
+  awal: {},           // salinan nilai formulir untuk tombol reset
+  sort: {key: null, dir: 1},  // urutan tabel: key null = peringkat skor server
+  lastState: null     // state terakhir, untuk render ulang saat kolom diklik
 };
 
 const BT_FIELDS = ["symbols","top","days","interval","download","oos","workers",
   "min_trades","equity","top_rows","vwap","sl","tp","be","be_buffer","trail",
   "cooldown","thr","wpa","ma_period","spike_scale","structure","breakout",
   "swing","min_candles","w_pnl","w_pf","w_dd"];
-
-const BT_MAX_SIGNAL = 64;        // sama dengan MAX_SIGNAL_COMBOS di service.py
-const BT_MAX_TOTAL  = 200000;    // sama dengan MAX_TOTAL_ROWS
 
 function btEl(name){ return $("bt_" + name); }
 
@@ -1075,17 +1084,79 @@ function btVal(name){
 }
 
 /* --------- parsing daftar angka --------- */
+/* Cermin dari parse_floats/_expand_range_token di tools/backtest/optimize.py:
+   angka dipisah koma, plus rentang otomatis 'awal..akhir' atau
+   'awal..akhir:langkah' (contoh 0.5..2.0:0.25). Rentang menurun pun sah.
+   Batas 10.000 nilai per kolom sama dengan MAX_LIST_VALUES di Python. */
+const BT_MAX_LIST = 10000;
+
 function btNums(text){
-  return String(text ?? "").split(",")
-    .map(s => parseFloat(s.trim()))
-    .filter(v => !isNaN(v));
+  const out = [];
+  for(const bagian of String(text ?? "").split(",")){
+    const s = bagian.trim();
+    if(!s) continue;
+    if(s.includes("..")){
+      const m = s.match(/^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)(?::(-?\d+(?:\.\d+)?))?$/);
+      if(!m){ out.push(NaN); continue; }   // rentang salah format -> estimate error
+      const a = parseFloat(m[1]), b = parseFloat(m[2]);
+      let langkah = m[3] !== undefined ? parseFloat(m[3]) : 1;
+      if(!isFinite(langkah) || langkah === 0){ out.push(NaN); continue; }
+      const arah = b >= a ? 1 : -1;
+      const delta = Math.abs(langkah) * arah;
+      const n = Math.floor((b - a) / delta + 1e-9) + 1;
+      if(n > BT_MAX_LIST){ out.push(NaN); continue; }
+      for(let i = 0; i < n; i++) out.push(Math.round((a + i * delta) * 1e10) / 1e10);
+      continue;
+    }
+    const v = parseFloat(s);
+    if(!isNaN(v)) out.push(v);
+  }
+  return out;
+}
+
+/* Kembalikan token rentang pertama yang tidak sah (format salah, langkah
+   nol, atau meledak melebihi BT_MAX_LIST nilai), atau null bila semua
+   sehat. Dipakai btEstimate supaya salah ketik terlihat jelas di layar
+   sebelum job dikirim, bukan tenggelam diam-diam. */
+function btRentangSakit(text){
+  for(const bagian of String(text ?? "").split(",")){
+    const s = bagian.trim();
+    if(!s.includes("..")) continue;
+    const m = s.match(/^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)(?::(-?\d+(?:\.\d+)?))?$/);
+    if(!m) return s;
+    const a = parseFloat(m[1]), b = parseFloat(m[2]);
+    const langkah = m[3] !== undefined ? parseFloat(m[3]) : 1;
+    if(!isFinite(langkah) || langkah === 0) return s;
+    const delta = Math.abs(langkah) * (b >= a ? 1 : -1);
+    const n = Math.floor((b - a) / delta + 1e-9) + 1;
+    if(n > BT_MAX_LIST) return s;
+  }
+  return null;
 }
 
 /* Hitung ukuran grid persis seperti build_grid/build_signal_grid di Python,
-   termasuk pembuangan duplikat fungsional, supaya angka di layar jujur. */
+   termasuk pembuangan duplikat fungsional, supaya angka di layar jujur.
+   Tidak ada batas jumlah kombinasi: angka berapa pun boleh, estimasi di
+   bawah yang memberi tahu seberapa besar job yang akan dijalankan. */
 function btEstimate(){
   const d = BT.defaults || {};
   const lo = d.min_stop_pct ?? 0.1, hi = d.max_stop_pct ?? 20;
+
+  // Rentang salah format di kolom grid mana pun harus terlihat jelas.
+  const KOLOM_GRID = ["sl","tp","be","be_buffer","trail","cooldown","thr","wpa",
+    "ma_period","spike_scale","structure","breakout","swing","min_candles"];
+  let sakit = null;
+  for(const k of KOLOM_GRID){
+    const s = btRentangSakit(btVal(k));
+    if(s){ sakit = k + ": '" + s + "'"; break; }
+  }
+  if(sakit !== null){
+    const el = $("btEst");
+    el.innerHTML = "Rentang tidak sah di " + esc(sakit) +
+      ". Format: awal..akhir atau awal..akhir:langkah (contoh 0.5..2.0:0.25).";
+    el.className = "bt-est over";
+    return false;
+  }
 
   const sl  = btNums(btVal("sl")).filter(v => v >= lo && v <= hi);
   const tp  = btNums(btVal("tp")).filter(v => v > 0);
@@ -1125,6 +1196,11 @@ function btEstimate(){
     ? String(btVal("symbols")).split(",").filter(s=>s.trim()).length
     : Number(btVal("top") || 0);
 
+  // Nilai SL di luar batas config memang dibuang dari grid (keputusan
+  // pemilik bot), jadi tampilkan jumlahnya supaya tidak mengejutkan.
+  const slSemua = btNums(btVal("sl"));
+  const slBuang = slSemua.length - sl.length;
+
   const el = $("btEst");
   let pesan = "<b>" + nSignal + "</b> kombinasi sinyal × <b>" +
     nExit.toLocaleString("id-ID") + "</b> kombinasi exit = <b>" +
@@ -1133,14 +1209,15 @@ function btEstimate(){
   if(nSignal === 0 || nExit === 0){
     pesan = "Grid kosong. Periksa isian, rasio bobot harus di antara 0 dan 1.";
     lebih = true;
-  } else if(nSignal > BT_MAX_SIGNAL){
-    pesan += ", melebihi batas " + BT_MAX_SIGNAL + " kombinasi sinyal";
-    lebih = true;
-  } else if(total > BT_MAX_TOTAL){
-    pesan += ", melebihi batas " + BT_MAX_TOTAL.toLocaleString("id-ID") + " baris";
-    lebih = true;
-  } else if(nSignal > 1){
-    pesan += " · tiap kombinasi sinyal memindai ulang semua simbol";
+  } else {
+    if(nSignal > 1){
+      pesan += " · tiap kombinasi sinyal memindai ulang semua simbol";
+    }
+    if(slBuang > 0){
+      pesan += " · <span style='color:#fcd34d'>" + slBuang +
+        " nilai SL di luar batas config " + lo + ".." + hi +
+        " dibuang</span>";
+    }
   }
   el.innerHTML = pesan;
   el.className = "bt-est" + (lebih ? " over" : "");
@@ -1254,8 +1331,73 @@ function btNum(v, d=2){
   return (v === null || v === undefined || isNaN(v)) ? "-" : Number(v).toFixed(d);
 }
 
+/* --------- pengurutan tabel hasil ---------
+   Klik judul kolom angka: klik pertama urut kecil->besar, klik kedua
+   besar->kecil, klik ketiga kembali ke peringkat skor (urutan server).
+   Kolom # selalu menomori ulang 1..N sesuai urutan tampilan; peringkat
+   skor asli tetap disimpan di data-rank untuk pemilihan baris dan
+   pratinjau YAML. */
+const BT_SORT_VAL = {
+  thr:     r => r.signal.threshold,
+  wpa:     r => r.signal.w_pa,
+  sl:      r => r.exit.sl_pct,
+  tp:      r => r.exit.tp_rr,
+  be:      r => r.exit.be_rr,
+  buf:     r => r.exit.be_buffer_pct,
+  tr:      r => r.exit.trail_pct,
+  cd:      r => r.exit.cooldown_min,
+  n:       r => r.is.trades,
+  win:     r => r.is.win_rate,
+  ret:     r => r.is.net_return_pct,
+  pf:      r => r.is.profit_factor,
+  mdd:     r => r.is.max_dd_pct,
+  skor:    r => r.score,
+  oos_n:   r => r.oos ? r.oos.trades : null,
+  oos_ret: r => r.oos ? r.oos.net_return_pct : null,
+  oos_pf:  r => r.oos ? r.oos.profit_factor : null,
+  oos_mdd: r => r.oos ? r.oos.max_dd_pct : null
+};
+
+function btSortedRows(){
+  const s = BT.sort;
+  const ambil = BT_SORT_VAL[s.key];
+  if(!s.key || !ambil) return BT.rows;   // urutan peringkat skor dari server
+  return [...BT.rows].sort((a, b) => {
+    const va = ambil(a), vb = ambil(b);
+    const kosong = v => v === null || v === undefined || isNaN(v);
+    if(kosong(va) && kosong(vb)) return 0;
+    if(kosong(va)) return 1;    // nilai kosong (SKOR null, OOS kosong) di bawah
+    if(kosong(vb)) return -1;
+    return s.dir * (va - vb);   // dir 1 = kecil->besar, -1 = besar->kecil
+  });
+}
+
+function btSortKlik(th){
+  const k = th.dataset.k;
+  if(!k || !BT.rows.length) return;
+  const s = BT.sort;
+  if(s.key !== k){ s.key = k; s.dir = 1; }   // klik pertama: naik
+  else if(s.dir === 1){ s.dir = -1; }        // klik kedua: turun
+  else { s.key = null; s.dir = 1; }          // klik ketiga: peringkat skor
+  btRenderRows(BT.lastState);
+}
+
+function btSortTanda(){
+  document.querySelectorAll(".bt-res th[data-k]").forEach(th => {
+    const panah = th.querySelector(".si");
+    const aktif = th.dataset.k === BT.sort.key;
+    th.classList.toggle("aktif", aktif);
+    if(panah) panah.textContent = aktif ? (BT.sort.dir === 1 ? "▲" : "▼") : "";
+  });
+}
+
+document.querySelectorAll(".bt-res th[data-k]").forEach(th => {
+  th.onclick = () => btSortKlik(th);
+});
+
 function btRenderRows(state){
   const tb = $("btRows");
+  BT.lastState = state;
   $("btResults").style.display = "";
   const m = state.meta || {};
   $("btResMeta").textContent = m.n_symbols
@@ -1264,7 +1406,7 @@ function btRenderRows(state){
       btFormatDuration(m.elapsed_sec) + ")"
     : "";
 
-  tb.innerHTML = BT.rows.map(r => {
+  tb.innerHTML = btSortedRows().map((r, urut) => {
     const s = r.signal, e = r.exit, i = r.is, o = r.oos;
     const oosSel = o
       ? "<td class='oos'>" + o.trades + "</td>" +
@@ -1274,7 +1416,7 @@ function btRenderRows(state){
       : "<td class='oos mut'>-</td><td class='mut'>-</td><td class='mut'>-</td><td class='mut'>-</td>";
     return "<tr data-rank='" + r.rank + "'" +
       (r.rank === BT.sel ? " class='sel'" : "") + ">" +
-      "<td>" + r.rank + "</td>" +
+      "<td>" + (urut + 1) + "</td>" +
       "<td>" + btNum(s.threshold,0) + "</td>" +
       "<td>" + btNum(s.w_pa,2) + "</td>" +
       "<td>" + btNum(e.sl_pct) + "</td>" +
@@ -1291,6 +1433,8 @@ function btRenderRows(state){
       "<td>" + btNum(r.score,3) + "</td>" + oosSel + "</tr>";
   }).join("");
 
+  btSortTanda();
+
   [...tb.querySelectorAll("tr")].forEach(tr => {
     tr.onclick = () => { BT.sel = Number(tr.dataset.rank); btRenderRows(state); };
   });
@@ -1300,7 +1444,7 @@ function btRenderRows(state){
     BT.sel = pilih.rank;
     $("btYaml").style.display = "";
     $("btYaml").textContent =
-      "# Cuplikan YAML untuk baris peringkat " + pilih.rank + "\n" +
+      "# Cuplikan YAML untuk baris terpilih (peringkat skor " + pilih.rank + ")\n" +
       "# (tombol di atas menulis nilai ini langsung ke config.yaml)\n\n" +
       pilih.yaml;
     const adaCd = pilih.apply && pilih.apply.cooldown &&
@@ -1358,6 +1502,7 @@ $("btRun").onclick = async () => {
   $("btResults").style.display = "none";
   $("btError").style.display = "none";
   BT.logSeq = 0; BT.rows = []; BT.sel = 1;
+  BT.sort = {key: null, dir: 1};   // job baru mulai dari peringkat skor
 
   const r = await api("/api/backtest/start", body);
   if(!r) return;

@@ -46,7 +46,26 @@ HOSTS = ("https://data-api.binance.vision", "https://api.binance.com")
 DATA_DIR = os.path.join("data", "backtest")
 
 # Interval yang didukung tools ini
-INTERVAL_MS = {"1m": 60_000, "5m": 300_000}
+# Interval candle yang didukung. Seluruhnya adalah interval resmi endpoint
+# /api/v3/klines Binance. 1s dilewati karena berbagai konversi "per menit"
+# di tools ini membagi durasi dengan 60_000; 3d/1w/1M dilewati karena candle
+# berdurasi hari-bulan tidak relevan untuk deteksi pump jangka menit-jam.
+# Menambah entri di sini otomatis meluaskan pilihan di dashboard, CLI
+# download, CLI optimizer, dan signals_probe (semuanya membaca dict ini).
+INTERVAL_MS = {
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "8h": 28_800_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+}
 
 # Batas bobot per menit (REQUEST_WEIGHT / MINUTE) dan ambang jaga-jaga.
 WEIGHT_LIMIT = 6000

@@ -28,6 +28,7 @@ import csv
 import glob
 import math
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -58,18 +59,77 @@ RESULTS_CSV = os.path.join(DATA_DIR, "results.csv")
 # Grid
 # ---------------------------------------------------------------------------
 
+# Batas teknis jumlah nilai yang boleh dihasilkan SATU token rentang
+# (contoh: "0.5..2.0:0.25"). Ini bukan batas strategi melainkan pengaman
+# salah ketik: rentang yang meledak (mis. "0..1000000:0.001") akan membuat
+# daftar ratusan juta angka dan membunuh proses karena kehabisan memori
+# sebelum backtest sempat dimulai.
+MAX_LIST_VALUES = 10_000
+
+# Pola token rentang: "awal..akhir" (langkah 1) atau "awal..akhir:langkah".
+_RE_RANGE = re.compile(
+    r"^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)(?::(-?\d+(?:\.\d+)?))?$")
+
+
+def _expand_range_token(token: str) -> Optional[list[float]]:
+    """Uraikan token rentang menjadi daftar angka.
+
+    Mengembalikan None bila token bukan rentang (pemanggil memperlakukannya
+    sebagai angka biasa). Melempar ValueError dengan pesan jelas bila token
+    berbentuk rentang tetapi tidak sah (langkah nol, bukan angka, atau
+    menghasilkan terlalu banyak nilai). Nilai dibulatkan ke 10 desimal untuk
+    membuang cacat penjumlahan float (0.1 + 2*0.05 harus tepat 0.2).
+    """
+    m = _RE_RANGE.match(token.strip())
+    if not m:
+        if ".." in token:
+            raise ValueError(
+                f"Rentang '{token}' tidak sah. Format yang benar: "
+                "'awal..akhir' atau 'awal..akhir:langkah', contoh "
+                "'0.5..2.0:0.25'.")
+        return None
+    lo = float(m.group(1))
+    hi = float(m.group(2))
+    step = float(m.group(3)) if m.group(3) is not None else 1.0
+    if step == 0:
+        raise ValueError(f"Langkah rentang '{token}' tidak boleh nol.")
+    arah = 1.0 if hi >= lo else -1.0
+    delta = abs(step) * arah
+    n = int(math.floor((hi - lo) / delta + 1e-9)) + 1
+    if n > MAX_LIST_VALUES:
+        raise ValueError(
+            f"Rentang '{token}' menghasilkan {n:,} nilai, melebihi batas "
+            f"teknis {MAX_LIST_VALUES:,} nilai per kolom. Perbesar langkah "
+            f"atau persempit rentangnya.")
+    return [round(lo + i * delta, 10) for i in range(n)]
+
+
 def parse_floats(text: str, fallback: list[float]) -> list[float]:
-    """Parse daftar angka dipisah koma dari CLI, kosong berarti default."""
+    """Parse daftar angka dipisah koma dari CLI, kosong berarti default.
+
+    Selain angka tunggal, tiap suku juga boleh berupa rentang otomatis
+    'awal..akhir' atau 'awal..akhir:langkah' (inklusif di kedua ujung),
+    contoh '0.5..2.0:0.25' menjadi 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0.
+    Rentang menurun juga sah, contoh '2.0..0.5:0.5'.
+    """
     if not text or not text.strip():
         return list(fallback)
+    if not isinstance(text, str):
+        text = str(text)
     out: list[float] = []
     for chunk in text.split(","):
         chunk = chunk.strip()
         if not chunk:
             continue
         try:
+            rentang = _expand_range_token(chunk)
+            if rentang is not None:
+                out.extend(rentang)
+                continue
             out.append(float(chunk))
-        except ValueError:
+        except ValueError as exc:
+            if ".." in chunk:
+                raise  # rentang salah format harus terdengar keras
             print(f"Peringatan: nilai '{chunk}' bukan angka, dilewati")
     return out or list(fallback)
 
