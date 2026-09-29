@@ -104,7 +104,7 @@ data:
 signal:
   # Skor gabungan minimum (0-100) sebelum bot boleh entry.
   # 70 = cukup selektif. Turunkan (60) untuk lebih banyak sinyal.
-  score_threshold: 70.0
+  score_threshold: 50.0
 
   # Setelah exit, simbol ini "dinginkan" dulu selama X menit
   # supaya tidak langsung masuk lagi di kondisi yang sama.
@@ -276,7 +276,7 @@ stops:
   # Default SL tetap 1% di bawah entry. Mode structure tetap tersedia bila
   # diperlukan, tetapi contoh strategi 1:2 menggunakan mode percent.
   mode: percent
-  percent_pct: 6.0
+  percent_pct: 2.0
   structure_buffer_pct: 0.15
   min_stop_pct: 0.5
   max_stop_pct: 10.0
@@ -290,15 +290,15 @@ breakeven:
   enabled: true
   # BE saat +1R, yaitu entry + 1 x jarak SL awal. Dengan TP 2R, BE aktif
   # sebelum TP apa pun jarak SL yang digunakan.
-  trigger_rr: 0.75
+  trigger_rr: 2.0
   # Buffer minimal 2x fee tetap dipakai agar BE tidak rugi karena biaya.
-  buffer_pct: 0.2
+  buffer_pct: 0.3
 
 trailing:
   # Aktif otomatis segera setelah BE; SL mengikuti harga tertinggi dengan
   # jarak percent_pct. (Fitur ATR trailing sudah dihapus dari bot.)
   enabled: true
-  percent_pct: 0.5
+  percent_pct: 1.0
   update_step_pct: 0.15
 
 execution:
