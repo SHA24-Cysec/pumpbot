@@ -44,6 +44,27 @@ class ExchangeGateway(ABC):
     async def stop(self) -> None:
         """Tutup semua koneksi dengan rapi."""
 
+    # ------------------------------------------------------- user data stream
+    async def start_user_data_stream(self, on_event: Callable[[dict], None]
+                                     ) -> bool:
+        """
+        Langganan event akun real-time (executionReport / listStatus).
+
+        Default: tidak didukung (mode paper/simulasi tidak punya akun nyata),
+        sehingga deteksi fill memakai jalur internal gateway. Implementasi
+        live menimpa metode ini.
+        """
+        return False
+
+    async def stop_user_data_stream(self) -> None:
+        """Hentikan langganan event akun (no-op bila tidak pernah aktif)."""
+        return None
+
+    @property
+    def user_stream_active(self) -> bool:
+        """True bila langganan event akun sedang hidup."""
+        return False
+
     # -------------------------------------------------------------- info pasar
     @abstractmethod
     async def get_symbol_filters(self) -> dict[str, SymbolFilters]:

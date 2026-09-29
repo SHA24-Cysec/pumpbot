@@ -213,11 +213,23 @@ class ExecutionCfg:
     limit_entry_timeout_sec: int = 20
     oco_sl_limit_buffer_pct: float = 0.3
     reconcile_sec: int = 5
+    # Umur maksimum data pasar (detik) sebelum ENTRY BARU diblokir dan
+    # pembaruan SL trailing/breakeven ditunda. 0 = gate dimatikan.
+    # Default 90 detik = 1,5x interval watchdog WebSocket (60 detik).
+    max_data_age_sec: float = 90.0
+    # Deteksi fill TP/SL lewat User Data Stream (WebSocket API). Bila mati
+    # atau tidak tersedia, bot kembali ke polling `reconcile_sec`.
+    user_data_stream: bool = True
+    # Paksa endpoint OCO lama POST /api/v3/order/oco (DEPRECATED sejak
+    # 2024-04-02). Default false = pakai POST /api/v3/orderList/oco.
+    oco_legacy_endpoint: bool = False
 
 
 @dataclass
 class DashboardCfg:
-    host: str = "0.0.0.0"
+    # Default loopback: dashboard bisa menutup posisi dan mengubah parameter
+    # risiko, jadi jangan pernah terbuka ke jaringan secara default.
+    host: str = "127.0.0.1"
     port: int = 8000
 
 
@@ -714,6 +726,9 @@ def validate(cfg: Config) -> list[str]:
         errors.append("execution.oco_sl_limit_buffer_pct harus di rentang 0..5 persen")
     if e.reconcile_sec < 2:
         errors.append("execution.reconcile_sec minimal 2 detik")
+    if e.max_data_age_sec < 0:
+        errors.append("execution.max_data_age_sec tidak boleh negatif "
+                      "(0 = gate data basi dimatikan)")
 
     # --- lain-lain ---
     if not 1 <= cfg.dashboard.port <= 65535:

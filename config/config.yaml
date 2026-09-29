@@ -321,6 +321,20 @@ execution:
   # Seberapa sering status OCO di-exchange direkonsiliasi (detik).
   reconcile_sec: 5
 
+  # Umur maksimum data pasar (detik) sebelum entry baru DIBLOKIR dan
+  # pembaruan SL breakeven/trailing ditunda. Melindungi dari kondisi
+  # "WebSocket terlihat hidup tetapi tidak ada data masuk" sehingga bot
+  # tidak entry atau menggeser SL memakai harga basi.
+  # 0 = gate dimatikan (tidak disarankan untuk mode live).
+  max_data_age_sec: 90
+  # Deteksi fill TP/SL seketika lewat User Data Stream (WebSocket API,
+  # userDataStream.subscribe.signature). Mode live saja; bila gagal, bot
+  # otomatis kembali memakai polling reconcile_sec di atas.
+  user_data_stream: true
+  # true = paksa endpoint OCO lama (POST /api/v3/order/oco) yang sudah
+  # deprecated. Biarkan false kecuali endpoint baru bermasalah.
+  oco_legacy_endpoint: false
+
 # ----------------------------------------------------------------------------
 # DASHBOARD WEB
 # ----------------------------------------------------------------------------

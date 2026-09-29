@@ -25,6 +25,8 @@ import json
 import logging
 import os
 import signal as os_signal
+from typing import Optional
+
 from bot.config import Config
 from bot.data_collector.collector import DataCollector
 from bot.database.db import Database
@@ -117,6 +119,8 @@ class BotApp:
 
         self._tasks: list[asyncio.Task] = []
         self._shutdown_event = asyncio.Event()
+        # throttle log "data basi" supaya tidak membanjiri log/DB
+        self._last_stale_log_ms: int = 0
 
     # ------------------------------------------------------------------
     def _build_dust_sweeper(self):
@@ -205,6 +209,10 @@ class BotApp:
             sl_limit_buffer_pct=self.cfg.execution.oco_sl_limit_buffer_pct,
             # kedalaman stream orderbook (5/10/20 level) dari config
             depth_levels=self.cfg.data.depth_levels,
+            # true = paksa endpoint OCO lama (deprecated) bila endpoint baru
+            # bermasalah di lingkungan tertentu
+            oco_legacy_endpoint=getattr(
+                self.cfg.execution, "oco_legacy_endpoint", False),
         )
 
     # ------------------------------------------------------------------
@@ -228,6 +236,165 @@ class BotApp:
     # ------------------------------------------------------------------
     # Pemulihan posisi setelah restart
     # ------------------------------------------------------------------
+    async def _reconcile_restored_qty(self, pos: Position) -> bool:
+        """
+        Samakan qty posisi hasil restore dengan SALDO NYATA di exchange.
+
+        Return False bila posisi sudah tidak ada lagi di exchange (record
+        ditutup di sini) sehingga pemanggil melewati pemasangan OCO.
+        Kegagalan query saldo TIDAK menutup posisi apa pun; bot memilih
+        mempertahankan data lama dan hanya mencatat peringatan.
+        """
+        try:
+            free, locked = await self.gateway.get_base_balance(pos.symbol)
+        except Exception as exc:
+            logger.warning("Rekonsiliasi saldo %s gagal (%s) - memakai data "
+                           "database apa adanya.", pos.symbol, exc)
+            return True
+
+        total = max(0.0, float(free or 0.0) + float(locked or 0.0))
+        filters = self.executor.filters.get(pos.symbol)
+        min_qty = filters.min_qty if filters else 0.0
+        min_notional = filters.min_notional if filters else 0.0
+        harga = pos.entry_price or 0.0
+
+        habis = total <= max(min_qty, 1e-12)
+        if not habis and harga > 0 and min_notional > 0:
+            habis = total * harga < min_notional
+
+        if habis:
+            detail = (f"{pos.symbol}: database mencatat qty "
+                      f"{pos.qty_remaining:.10g} tetapi saldo exchange hanya "
+                      f"free={float(free or 0.0):.10g} locked={float(locked or 0.0):.10g}. "
+                      "Posisi dianggap sudah selesai di luar bot (OCO terisi "
+                      "atau ditutup manual) dan record lokal ditutup.")
+            logger.warning(detail)
+            self.db.record_event("WARNING", "RESTORE_EXTERNAL_CLOSE",
+                                 detail, pos.symbol)
+            self.db.add_trade_event(pos.trade_id, "EXTERNAL_CLOSE_RECONCILED",
+                                    harga, pos.qty_remaining, 0.0, detail)
+            pos.qty_remaining = 0.0
+            for c in pos.chunks:
+                if c.status == "PENDING":
+                    c.status = "CANCELED"
+            await self.executor._finalize_if_done(
+                pos, harga, "rekonsiliasi restart: aset sudah tidak ada",
+                force=True)
+            return False
+
+        if total + 1e-12 < pos.qty_remaining:
+            detail = (f"{pos.symbol}: qty database {pos.qty_remaining:.10g} > "
+                      f"saldo exchange {total:.10g}. Qty posisi dipangkas ke "
+                      "saldo nyata agar OCO tidak ditolak insufficient balance.")
+            logger.warning(detail)
+            self.db.record_event("WARNING", "RESTORE_QTY_ADJUSTED",
+                                 detail, pos.symbol)
+            faktor = total / pos.qty_remaining if pos.qty_remaining > 0 else 0.0
+            pos.qty_remaining = total
+            for c in pos.chunks:
+                c.qty = c.qty * faktor
+            self.db.update_trade(pos.trade_id, qty_remaining=pos.qty_remaining)
+        return True
+
+    async def _start_user_data_stream(self) -> bool:
+        """
+        Aktifkan deteksi fill real-time lewat User Data Stream.
+
+        Event akun hanya dipakai sebagai PEMICU rekonsiliasi: begitu ada
+        executionReport SELL atau listStatus untuk simbol kita, position
+        manager langsung memanggil `reconcile_oco` tanpa menunggu polling
+        `execution.reconcile_sec`. Sumber kebenaran tetap REST, sehingga
+        kegagalan stream tidak pernah membuat pencatatan salah, hanya
+        membuatnya kembali selambat polling.
+        """
+        if not getattr(self.cfg.execution, "user_data_stream", True):
+            logger.info("User Data Stream dimatikan lewat config.")
+            return False
+        mulai = getattr(self.gateway, "start_user_data_stream", None)
+        if not callable(mulai):
+            return False
+        try:
+            aktif = await mulai(self.executor.note_user_event)
+        except Exception as exc:
+            logger.error("User Data Stream gagal dimulai: %s", exc)
+            aktif = False
+        if aktif:
+            self.db.record_event(
+                "INFO", "USER_STREAM_STARTED",
+                "User Data Stream aktif: fill TP/SL terdeteksi seketika")
+        elif self.mode == "live":
+            self.db.record_event(
+                "WARN", "USER_STREAM_UNAVAILABLE",
+                f"User Data Stream tidak aktif. Deteksi fill memakai polling "
+                f"REST tiap {self.cfg.execution.reconcile_sec} detik.")
+        return aktif
+
+    async def _verify_live_api_permissions(self) -> None:
+        """
+        Cek izin API key sebelum trading live.
+
+        Bot hanya butuh "Enable Spot & Margin Trading". Izin WITHDRAW tidak
+        pernah dipakai dan merupakan risiko terbesar bila key bocor, jadi
+        bot MENOLAK jalan kalau izin itu aktif. Sumber data: endpoint resmi
+        GET /sapi/v1/account/apiRestrictions (binance-sdk-wallet).
+        Kegagalan query hanya menghasilkan peringatan supaya gangguan
+        jaringan sesaat tidak mematikan bot yang sudah punya posisi.
+        """
+        if self.mode != "live":
+            return
+        try:
+            from binance_sdk_wallet import Wallet
+            from binance_common.configuration import ConfigurationRestAPI
+        except ImportError as exc:
+            logger.warning("Cek izin API key dilewati (binance-sdk-wallet "
+                           "tidak terpasang: %s)", exc)
+            return
+        try:
+            wallet = Wallet(config_rest_api=ConfigurationRestAPI(
+                api_key=os.getenv("BINANCE_API_KEY", ""),
+                api_secret=os.getenv("BINANCE_API_SECRET", ""),
+            ))
+            resp = await asyncio.to_thread(wallet.rest_api.get_api_key_permission)
+            data = resp.data() if hasattr(resp, "data") else resp
+            if hasattr(data, "to_dict"):
+                data = data.to_dict()
+            if not isinstance(data, dict):
+                data = {}
+        except Exception as exc:
+            logger.warning("Cek izin API key gagal (%s) - lanjut, tetapi "
+                           "pastikan sendiri withdraw NONAKTIF.", exc)
+            return
+
+        def _flag(*names) -> Optional[bool]:
+            for n in names:
+                if n in data and data[n] is not None:
+                    return bool(data[n])
+            return None
+
+        withdraw = _flag("enableWithdrawals", "enable_withdrawals")
+        spot = _flag("enableSpotAndMarginTrading", "enable_spot_and_margin_trading")
+        ip_restrict = _flag("ipRestrict", "ip_restrict")
+
+        if withdraw:
+            pesan = ("API key mengaktifkan IZIN WITHDRAW. Bot menolak jalan di "
+                     "mode live: matikan 'Enable Withdrawals' di Binance API "
+                     "Management lalu jalankan ulang.")
+            self.db.record_event("ERROR", "API_PERMISSION", pesan)
+            notify("⛔ " + pesan, level="ERROR")
+            raise RuntimeError(pesan)
+        if spot is False:
+            pesan = ("API key TIDAK punya izin Spot Trading; order pasti "
+                     "ditolak. Aktifkan 'Enable Spot & Margin Trading'.")
+            self.db.record_event("ERROR", "API_PERMISSION", pesan)
+            raise RuntimeError(pesan)
+        if ip_restrict is False:
+            logger.warning("API key TIDAK dibatasi IP. Sangat disarankan "
+                           "mengaktifkan 'Restrict access to trusted IPs'.")
+            self.db.record_event("WARNING", "API_PERMISSION",
+                                 "API key tanpa pembatasan IP")
+        logger.info("Cek izin API key: withdraw=%s spot=%s ip_restrict=%s",
+                    withdraw, spot, ip_restrict)
+
     async def _restore_positions(self) -> None:
         rows = self.db.get_open_trades()
         if not rows:
@@ -263,6 +430,15 @@ class BotApp:
                     exit_mode=r["exit_mode"] or "oco",
                 )
                 self.executor.positions[pos.trade_id] = pos
+
+                # REKONSILIASI SALDO (live): database bisa saja mencatat qty
+                # yang sudah tidak ada di exchange (OCO terisi saat bot mati,
+                # atau posisi ditutup manual dari aplikasi Binance). Tanpa ini
+                # bot memasang OCO untuk qty yang tidak dimiliki (-2010) dan
+                # statistik/equity ikut salah.
+                if self.mode != "paper":
+                    if not await self._reconcile_restored_qty(pos):
+                        continue
                 # Mode paper dilewati: buku order akun demo hidup di memori,
                 # jadi setelah restart tidak ada order tersisa untuk dibatalkan
                 # (aset base yang tadinya terkunci OCO sudah dibebaskan saat
@@ -300,6 +476,20 @@ class BotApp:
         self.db.record_signal(sig.symbol, sig.price, sig.score, sig.breakdown)
         if self.paused:
             return
+        # GATE DATA BASI: jangan pernah entry memakai harga lama. Stream bisa
+        # terlihat "connected" padahal tidak ada pesan masuk; sizing, SL, dan
+        # TP yang dihitung dari harga basi bisa langsung salah besar.
+        max_age = float(getattr(self.cfg.execution, "max_data_age_sec", 0.0) or 0.0)
+        if self.collector.data_is_stale(max_age):
+            umur = self.collector.data_age_sec
+            if now_ms() - self._last_stale_log_ms > 60_000:
+                self._last_stale_log_ms = now_ms()
+                pesan = (f"Entry diblokir: data pasar basi "
+                         f"({'tidak ada data' if umur == float('inf') else f'{umur:.0f} detik'}"
+                         f" > {max_age:.0f} detik) atau WebSocket mati.")
+                logger.error(pesan)
+                self.db.record_event("ERROR", "DATA_STALE", pesan, sig.symbol)
+            return
         halted, _ = self.risk.check_daily_limit(
             self.portfolio.equity(list(self.executor.positions.values())))
         if halted:
@@ -329,9 +519,12 @@ class BotApp:
             # menjalankan shutdown -> koneksi WS/session ditutup rapi dan
             # notifikasi terkirim, bukan meninggalkan "Unclosed client session"
             await self.gateway.start()
+            # Verifikasi izin API key SEBELUM ada order apa pun (live saja).
+            await self._verify_live_api_permissions()
             # Ambil filter lebih awal agar posisi yang dipulihkan bisa langsung
             # dipasangi OCO ulang sebelum universe/watchlist selesai start.
             self.executor.filters = await self.gateway.get_symbol_filters()
+            await self._start_user_data_stream()
             await self._restore_positions()
             await self.collector.start()
             self.executor.filters = getattr(self.collector, "filters", self.executor.filters)
@@ -495,6 +688,10 @@ class BotApp:
             pass
         if self.uvicorn_server:
             self.uvicorn_server.should_exit = True
+        try:
+            await self.gateway.stop_user_data_stream()
+        except Exception as exc:
+            logger.debug(f"stop user data stream: {exc}")
         try:
             await self.collector.stop()
         except Exception as exc:

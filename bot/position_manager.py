@@ -64,9 +64,15 @@ class PositionManager:
                 # rekonsiliasi OCO cukup sekali per siklus (hemat rate limit)
                 reconcile_due = (now_ms() - self._last_reconcile
                                  >= self.cfg.execution.reconcile_sec * 1000)
+                # Simbol yang baru saja mengirim event akun lewat User Data
+                # Stream dicek SEKARANG tanpa menunggu throttle, sehingga fill
+                # TP/SL tercatat dalam hitungan milidetik, bukan detik.
+                ambil_urgen = getattr(self.executor, "take_urgent_symbols", None)
+                urgen = ambil_urgen() if callable(ambil_urgen) else set()
                 for pos in positions:
                     try:
-                        await self._manage(pos, reconcile_due)
+                        await self._manage(
+                            pos, reconcile_due or pos.symbol in urgen)
                     except Exception as exc:
                         logger.exception(f"Error mengelola posisi #{pos.trade_id}: {exc}")
                 if reconcile_due:
@@ -87,6 +93,20 @@ class PositionManager:
         pos.highest_price = max(pos.highest_price, price)
 
         manual_mode = (pos.exit_mode == "manual") or pos.oco_fallback
+
+        # Data basi: harga di buffer tidak bisa dipercaya. Pada mode OCO,
+        # proteksi SL/TP sudah hidup di exchange sehingga lebih aman MENUNDA
+        # penggeseran SL (breakeven/trailing) dan emergency sell berbasis
+        # harga basi daripada bertindak dengan angka lama. Rekonsiliasi OCO
+        # tetap jalan karena memakai data REST, bukan stream.
+        cek_basi = getattr(self.collector, "data_is_stale", None)
+        stale = bool(cek_basi(
+            float(getattr(self.cfg.execution, "max_data_age_sec", 0.0) or 0.0)
+        )) if callable(cek_basi) else False
+        if stale and not manual_mode:
+            if reconcile_due:
+                await self.executor.reconcile_oco(pos)
+            return
 
         # ---------------- 4/6. exit manual (bot sebagai eksekutor) --------
         if manual_mode:

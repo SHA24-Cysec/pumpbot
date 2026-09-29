@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from bot.config import Config
@@ -48,6 +49,30 @@ class DataCollector:
     @ws_alive.setter
     def ws_alive(self, val: bool) -> None:
         self._ws_running = bool(val)
+
+    @property
+    def data_age_sec(self) -> float:
+        """Umur data pasar terakhir (detik). inf = belum pernah ada data."""
+        if not self._ws_running:
+            return float("inf")
+        ts = float(getattr(self.gateway, "last_data_ts", 0.0) or 0.0)
+        if ts <= 0:
+            return float("inf")
+        return max(0.0, time.time() - ts)
+
+    def data_is_stale(self, max_age_sec: float) -> bool:
+        """True bila stream mati atau data lebih tua dari ``max_age_sec``.
+
+        Dipakai sebagai gate entry: koneksi WebSocket dapat terlihat "open"
+        padahal tidak ada pesan yang masuk (langganan hilang di sisi server),
+        sehingga harga di buffer sudah basi. Entry dengan harga basi berarti
+        sizing, SL, dan TP dihitung dari harga yang tidak berlaku lagi.
+        """
+        if max_age_sec <= 0:
+            return False          # gate dimatikan lewat config
+        if not self.ws_alive:
+            return True
+        return self.data_age_sec > max_age_sec
 
     # ------------------------------------------------------------------
     # Pemilihan watchlist

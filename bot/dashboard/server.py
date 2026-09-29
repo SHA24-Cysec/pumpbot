@@ -9,10 +9,18 @@ Dashboard web real-time.
 - GET  /api/backtest/... : status job dan unduhan CSV hasil
 
 KEAMANAN: dashboard mengontrol bot trading (tutup posisi, ubah risk %).
-Set environment DASHBOARD_TOKEN untuk membatasi akses: semua endpoint HTTP
-dan WebSocket lalu mensyaratkan token tersebut (via cookie, query ?token=,
-atau header X-Auth-Token). Tanpa token, dashboard terbuka seperti sebelumnya
-- pastikan host tetap 127.0.0.1 dalam kondisi itu.
+Tiga lapis proteksi:
+
+1. DASHBOARD_TOKEN (opsional). Bila diisi, semua endpoint HTTP dan WebSocket
+   mensyaratkan token tersebut (cookie, query ?token=, atau header
+   X-Auth-Token).
+2. TANPA token, dashboard hanya melayani klien LOOPBACK. Permintaan dari
+   alamat lain ditolak 403, dan bot MENOLAK START bila dashboard.host bukan
+   loopback sementara token kosong. Jadi tidak ada lagi kondisi "terbuka ke
+   jaringan tanpa login".
+3. Validasi header Host untuk mencegah DNS rebinding. Daftar host yang sah
+   dibangun otomatis dari dashboard.host + loopback, dan bisa ditambah lewat
+   environment DASHBOARD_ALLOWED_HOSTS (dipisah koma).
 
 Snapshot berisi: saldo, posisi terbuka, histori, statistik, equity curve,
 skor sinyal terbaru, status bot, dan ringkasan job backtest.
@@ -71,6 +79,67 @@ def _token_valid(token: str) -> bool:
     if not expected:
         return True  # autentikasi tidak diaktifkan
     return hmac.compare_digest(token, expected)
+
+
+# Nama host yang selalu dianggap lokal.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"})
+
+
+def is_loopback_host(host: str) -> bool:
+    """True bila alamat bind/host termasuk loopback (bukan 0.0.0.0)."""
+    return (host or "").strip().lower() in {"127.0.0.1", "localhost", "::1",
+                                            "[::1]"}
+
+
+def _client_is_local(client_host: Optional[str]) -> bool:
+    """True bila koneksi datang dari mesin yang sama."""
+    if not client_host:
+        # Tidak ada info klien (mis. transport uji). Dianggap lokal agar
+        # TestClient dan unix socket tetap bisa dipakai.
+        return True
+    host = client_host.strip().lower()
+    if host.startswith("::ffff:"):      # IPv4 yang dipetakan ke IPv6
+        host = host[7:]
+    return host in {"127.0.0.1", "::1", "localhost"} or host.startswith("127.")
+
+
+def _allowed_hosts(cfg_host: str) -> set:
+    """
+    Daftar nama host yang boleh muncul di header Host.
+
+    Dibangun otomatis dari `dashboard.host` + loopback, ditambah isi
+    environment DASHBOARD_ALLOWED_HOSTS (dipisah koma). Validasi ini
+    mencegah DNS rebinding: situs jahat yang memetakan domainnya ke
+    127.0.0.1 tidak bisa lagi memanggil endpoint kontrol, karena header
+    Host yang dikirim browser adalah domain penyerang.
+    """
+    hosts = set(LOOPBACK_HOSTS)
+    if cfg_host:
+        hosts.add(cfg_host.strip().lower())
+    extra = os.getenv("DASHBOARD_ALLOWED_HOSTS", "")
+    for item in extra.split(","):
+        item = item.strip().lower()
+        if item:
+            hosts.add(item)
+    return hosts
+
+
+def _host_header_ok(raw_host: str, allowed: set) -> bool:
+    """Bandingkan header Host (tanpa port) dengan whitelist."""
+    if not raw_host:
+        # HTTP/1.0 tanpa Host. Tidak bisa dipakai serangan rebinding lewat
+        # browser modern, jadi dibiarkan lolos ke lapis proteksi berikutnya.
+        return True
+    host = raw_host.strip().lower()
+    if host.startswith("["):                 # IPv6 literal: [::1]:8000
+        tutup = host.find("]")
+        host = host[:tutup + 1] if tutup != -1 else host
+    elif ":" in host:
+        host = host.rsplit(":", 1)[0]
+    if host in allowed:
+        return True
+    # Izinkan wildcard sederhana "*" untuk operator yang memang ingin terbuka
+    return "*" in allowed
 
 
 # ---------------------------------------------------------------------------
@@ -269,25 +338,54 @@ def create_dashboard_app(ctx) -> FastAPI:
     # TIDAK ikut mati kalau hanya mengandalkan sinyal ke grup proses bot.
     ctx.backtest = backtest
 
-    # ---------------- autentikasi opsional (DASHBOARD_TOKEN) ----------------
+    # ---------------- keamanan: Host, loopback, token ----------------
+    allowed_hosts = _allowed_hosts(getattr(ctx.cfg.dashboard, "host", ""))
+
     @app.middleware("http")
     async def _auth_middleware(request: Request, call_next):
-        if _dashboard_token():
-            token = _request_token(request)
-            if not _token_valid(token):
+        # 1. Validasi header Host (anti DNS rebinding). Dilakukan lebih dulu
+        #    karena serangan ini justru menargetkan dashboard di loopback.
+        if not _host_header_ok(request.headers.get("host", ""), allowed_hosts):
+            logger.warning("Permintaan dashboard ditolak: header Host '%s' "
+                           "tidak dikenal (klien %s).",
+                           request.headers.get("host", ""),
+                           request.client.host if request.client else "?")
+            return JSONResponse(
+                {"ok": False,
+                 "error": "Akses ditolak: header Host tidak dikenal. "
+                          "Tambahkan ke DASHBOARD_ALLOWED_HOSTS bila memang "
+                          "host yang sah."},
+                status_code=400)
+
+        # 2. Tanpa DASHBOARD_TOKEN, dashboard HANYA melayani klien lokal.
+        if not _dashboard_token():
+            if not _client_is_local(request.client.host if request.client
+                                    else None):
+                logger.warning("Permintaan dashboard dari %s ditolak: "
+                               "DASHBOARD_TOKEN belum diisi.",
+                               request.client.host if request.client else "?")
                 return JSONResponse(
                     {"ok": False,
-                     "error": "Akses ditolak: DASHBOARD_TOKEN aktif, "
-                              "kirim ?token=... / header X-Auth-Token."},
-                    status_code=401)
-            # token valid via query param -> simpan sebagai cookie agar
-            # fetch() dan WebSocket berikutnya tidak perlu menyertakan token
-            response = await call_next(request)
-            if request.query_params.get("token") and not request.cookies.get(TOKEN_COOKIE):
-                response.set_cookie(TOKEN_COOKIE, token, httponly=True,
-                                    samesite="strict")
-            return response
-        return await call_next(request)
+                     "error": "Akses ditolak: dashboard tanpa DASHBOARD_TOKEN "
+                              "hanya bisa diakses dari mesin yang sama."},
+                    status_code=403)
+            return await call_next(request)
+
+        # 3. Token aktif: semua endpoint wajib menyertakannya.
+        token = _request_token(request)
+        if not _token_valid(token):
+            return JSONResponse(
+                {"ok": False,
+                 "error": "Akses ditolak: DASHBOARD_TOKEN aktif, "
+                          "kirim ?token=... / header X-Auth-Token."},
+                status_code=401)
+        # token valid via query param -> simpan sebagai cookie agar
+        # fetch() dan WebSocket berikutnya tidak perlu menyertakan token
+        response = await call_next(request)
+        if request.query_params.get("token") and not request.cookies.get(TOKEN_COOKIE):
+            response.set_cookie(TOKEN_COOKIE, token, httponly=True,
+                                samesite="strict")
+        return response
 
     # ---------------- cache snapshot WebSocket ----------------
     # build_snapshot membaca histori + statistik dari SQLite; tanpa cache,
@@ -323,9 +421,18 @@ def create_dashboard_app(ctx) -> FastAPI:
     # ---------------- WebSocket broadcast ----------------
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
-        # proteksi token untuk WS: cookie (dikirim browser saat handshake
-        # same-origin) atau query param ?token=
-        if _dashboard_token():
+        # Middleware HTTP TIDAK berlaku untuk handshake WebSocket, jadi
+        # ketiga lapis proteksi diulang di sini.
+        if not _host_header_ok(ws.headers.get("host", ""), allowed_hosts):
+            await ws.close(code=4403)
+            return
+        if not _dashboard_token():
+            if not _client_is_local(ws.client.host if ws.client else None):
+                await ws.close(code=4403)
+                return
+        else:
+            # proteksi token untuk WS: cookie (dikirim browser saat handshake
+            # same-origin) atau query param ?token=
             token = ws.query_params.get("token") or ws.cookies.get(TOKEN_COOKIE, "")
             if not _token_valid(token):
                 await ws.close(code=4401)
@@ -540,13 +647,18 @@ async def run_dashboard(ctx) -> None:
     # Peringatan keras: dashboard punya kontrol penuh atas bot trading tanpa
     # login bawaan. Bind ke interface selain loopback tanpa token = siapa pun
     # di jaringan itu bisa menutup posisi / mengubah risk % / menjalankan bot.
-    loopback = host in ("127.0.0.1", "localhost", "::1")
+    loopback = is_loopback_host(host)
     if not loopback and not _dashboard_token():
-        logger.warning(
-            "!!! KEAMANAN: dashboard di-bind ke %s TANPA DASHBOARD_TOKEN. "
-            "Siapa pun di jaringan tersebut dapat mengontrol bot (tutup "
-            "posisi, ubah risk %%, pause/resume). Set DASHBOARD_TOKEN di "
-            ".env atau ubah dashboard.host ke 127.0.0.1.", host)
+        # Dulu ini hanya peringatan, dan bot tetap jalan dengan dashboard
+        # terbuka ke seluruh jaringan tanpa login sama sekali. Sekarang
+        # dianggap kesalahan konfigurasi yang fatal.
+        raise RuntimeError(
+            f"KEAMANAN: dashboard.host='{host}' bukan loopback sementara "
+            f"DASHBOARD_TOKEN kosong. Siapa pun di jaringan itu dapat "
+            f"menutup posisi, mengubah risk %, dan menjalankan bot. "
+            f"Isi DASHBOARD_TOKEN di .env, atau ubah dashboard.host menjadi "
+            f"127.0.0.1 (akses jarak jauh sebaiknya lewat SSH tunnel)."
+        )
     config = uvicorn.Config(app, host=host, port=port,
                             log_level="warning", access_log=False)
     server = uvicorn.Server(config)

@@ -217,6 +217,11 @@ class PaperGateway(ExchangeGateway):
         """True bila koneksi WebSocket market data aktif."""
         return getattr(self._market, "is_ws_connected", False)
 
+    @property
+    def last_data_ts(self) -> float:
+        """Epoch detik pesan stream terakhir (diteruskan dari gateway market)."""
+        return float(getattr(self._market, "last_data_ts", 0.0) or 0.0)
+
     # ==================================================================
     # LIFECYCLE
     # ==================================================================

@@ -32,16 +32,19 @@ logger = logging.getLogger("pumpbot.binance")
 try:
     from binance_common.configuration import (
         ConfigurationRestAPI,
+        ConfigurationWebSocketAPI,
         ConfigurationWebSocketStreams,
     )
     from binance_common.constants import (
         SPOT_REST_API_PROD_URL,
+        SPOT_WS_API_PROD_URL,
         SPOT_WS_STREAMS_PROD_URL,
     )
     from binance_common.errors import (
         BadRequestError,
         ClientError,
         NetworkError,
+        RateLimitBanError,
         ServerError,
         TooManyRequestsError,
     )
@@ -56,6 +59,19 @@ try:
         OrderOcoSideEnum,
         OrderOcoStopLimitTimeInForceEnum,
     )
+    try:
+        # Endpoint OCO baru (POST /api/v3/orderList/oco). Tersedia sejak
+        # binance-sdk-spot 11.x; endpoint lama POST /api/v3/order/oco sudah
+        # DEPRECATED Binance sejak 2024-04-02 dan akan dihapus.
+        from binance_sdk_spot.rest_api.models.enums import (
+            OrderListOcoAboveTypeEnum,
+            OrderListOcoBelowTimeInForceEnum,
+            OrderListOcoBelowTypeEnum,
+            OrderListOcoSideEnum,
+        )
+        _ORDERLIST_OCO_ENUMS = True
+    except ImportError:      # pragma: no cover - SDK lama
+        _ORDERLIST_OCO_ENUMS = False
     _SDK_AVAILABLE = True
 
     # Peta interval REST & WS (dibangun di sini supaya modul tetap bisa
@@ -68,6 +84,7 @@ try:
     }
 except ImportError as exc:  # pragma: no cover
     _SDK_AVAILABLE = False
+    _ORDERLIST_OCO_ENUMS = False
     _import_error = exc
     _INTERVAL_MAP = {}
 
@@ -171,7 +188,7 @@ class BinanceGateway(ExchangeGateway):
 
     def __init__(self, mode: str, api_key: str, api_secret: str,
                  quote_asset: str = "USDT", sl_limit_buffer_pct: float = 0.3,
-                 depth_levels: int = 20):
+                 depth_levels: int = 20, oco_legacy_endpoint: bool = False):
         if not _SDK_AVAILABLE:
             raise RuntimeError(
                 f"SDK resmi binance-sdk-spot belum terpasang: {_import_error}. "
@@ -219,8 +236,29 @@ class BinanceGateway(ExchangeGateway):
                 reconnect_delay=5000,     # ms antar percobaan reconnect
                 reconnect_attempts=10,    # maksimum percobaan bawaan SDK
             ),
+            # WebSocket API dipakai HANYA untuk User Data Stream (mode live).
+            # listenKey REST sudah deprecated Binance sejak 2025-04-07 dan
+            # tidak lagi disediakan SDK v11; penggantinya
+            # `userDataStream.subscribe.signature` lewat WebSocket API.
+            config_ws_api=(
+                ConfigurationWebSocketAPI(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    stream_url=SPOT_WS_API_PROD_URL,
+                    reconnect_delay=5000,
+                    reconnect_attempts=10,
+                ) if mode == "live" else None
+            ),
         )
         self._ws_started = False
+        self._oco_force_legacy = bool(oco_legacy_endpoint)
+        # --- user data stream (mode live) ---
+        self._uds_handle = None          # RequestStreamHandle
+        self._uds_conn = None            # koneksi WebSocket API
+        self._uds_cb: Optional[Callable] = None
+        self._uds_subscription_id = None
+        self._uds_last_event_ts: float = 0.0
+        self._uds_started: bool = False
         self._stream_handles = []
         self._watchdog_task: Optional[asyncio.Task] = None
         self._subscribed_symbols: list[str] = []
@@ -255,7 +293,18 @@ class BinanceGateway(ExchangeGateway):
         for attempt in range(1, 6):
             try:
                 return _to_plain(await asyncio.to_thread(fn, *args, **kwargs))
+            except RateLimitBanError as exc:
+                # HTTP 418 = IP sudah di-BAN otomatis (2 menit s/d 3 hari).
+                # Mengulang permintaan hanya memperpanjang ban, jadi error
+                # diteruskan apa adanya ke pemanggil.
+                logger.error(
+                    "IP di-BAN Binance (418). Bot berhenti mengirim request "
+                    "endpoint ini. retry_after=%ss pesan=%s",
+                    getattr(exc, "retry_after", None),
+                    getattr(exc, "error_message", exc))
+                raise
             except TooManyRequestsError as exc:
+                last_exc = exc
                 wait = float(getattr(exc, "retry_after", None) or delay)
                 logger.warning(f"Rate limit (429), tunggu {wait:.0f}s: {exc.error_message}")
                 await asyncio.sleep(min(wait, 60))
@@ -323,6 +372,113 @@ class BinanceGateway(ExchangeGateway):
     def _on_ws_close(self, *a, **kw) -> None:
         self._is_reconnecting = True
         logger.warning("WebSocket connection closed")
+
+    @property
+    def last_data_ts(self) -> float:
+        """Epoch detik saat pesan stream TERAKHIR diterima (0 = belum ada).
+
+        Dipakai gate data basi: koneksi WebSocket bisa terlihat "open"
+        padahal tidak ada data yang mengalir (langganan hilang di sisi
+        server / nama stream rusak). Tanpa pembanding waktu ini, bot bisa
+        entry memakai harga lama.
+        """
+        return self._last_data_ts
+
+    # ------------------------------------------------------- user data stream
+    async def start_user_data_stream(self, on_event: Callable[[dict], None]
+                                     ) -> bool:
+        """
+        Langganan User Data Stream lewat WebSocket API (mode live saja).
+
+        Mekanisme listenKey (`POST /api/v3/userDataStream` + stream
+        `wss://stream.binance.com:9443/ws/<listenKey>`) sudah DEPRECATED sejak
+        2025-04-07 dan tidak lagi tersedia di binance-sdk-spot v11. Pengganti
+        resminya adalah `userDataStream.subscribe.signature` pada WebSocket
+        API, yang bekerja dengan semua jenis API key (HMAC, RSA, Ed25519) dan
+        tidak memerlukan `session.logon`.
+
+        Mengembalikan True bila langganan aktif. Kegagalan TIDAK fatal:
+        pemanggil harus tetap mengandalkan polling `reconcile_oco` sebagai
+        jaring pengaman.
+        """
+        if self.mode != "live":
+            logger.debug("User data stream dilewati (mode %s).", self.mode)
+            return False
+        if self._uds_started:
+            return True
+        ws_api = getattr(self._client, "websocket_api", None)
+        if ws_api is None or not hasattr(ws_api,
+                                         "user_data_stream_subscribe_signature"):
+            logger.warning(
+                "SDK tidak menyediakan userDataStream.subscribe.signature. "
+                "Deteksi fill tetap memakai polling REST.")
+            return False
+        self._uds_cb = on_event
+        try:
+            self._uds_conn = await ws_api.create_connection()
+            resp = await ws_api.user_data_stream_subscribe_signature()
+            handle = getattr(resp, "stream", None)
+            if handle is None:
+                raise RuntimeError("respons langganan tanpa stream handle")
+            handle.on("message", self._on_user_data_event)
+            self._uds_handle = handle
+            self._uds_started = True
+            self._uds_last_event_ts = time.time()
+            logger.info("User Data Stream AKTIF (userDataStream.subscribe.signature). "
+                        "Fill TP/SL akan terdeteksi seketika.")
+            return True
+        except Exception as exc:
+            logger.error(
+                "Gagal membuka User Data Stream: %s. Bot tetap jalan dengan "
+                "polling REST (deteksi fill lebih lambat).", exc)
+            self._uds_started = False
+            self._uds_handle = None
+            return False
+
+    def _on_user_data_event(self, event) -> None:
+        """Callback SDK: normalkan payload lalu teruskan ke pemanggil."""
+        self._uds_last_event_ts = time.time()
+        try:
+            data = _to_plain(event)
+            if isinstance(data, dict) and "event" in data and "e" not in data:
+                # Sejak 2025-08-12 event dibungkus {subscriptionId, event}.
+                inner = _to_plain(data.get("event"))
+                if isinstance(inner, dict):
+                    data = inner
+            if not isinstance(data, dict):
+                return
+            if self._uds_cb is not None:
+                self._uds_cb(data)
+        except Exception as exc:      # callback SDK: jangan pernah melempar
+            logger.error("Gagal memproses event user data stream: %s", exc)
+
+    async def stop_user_data_stream(self) -> None:
+        """Berhenti berlangganan user data stream (aman dipanggil berulang)."""
+        handle, self._uds_handle = self._uds_handle, None
+        self._uds_started = False
+        self._uds_cb = None
+        if handle is not None:
+            try:
+                await handle.unsubscribe()
+            except Exception as exc:
+                logger.debug("Unsubscribe user data stream: %s", exc)
+        ws_api = getattr(self._client, "websocket_api", None)
+        if ws_api is not None and self._uds_conn is not None:
+            try:
+                await ws_api.close_connection()
+            except Exception as exc:
+                logger.debug("Penutupan koneksi WebSocket API: %s", exc)
+        self._uds_conn = None
+
+    @property
+    def user_stream_active(self) -> bool:
+        """True bila langganan user data stream sedang hidup."""
+        return bool(self._uds_started)
+
+    @property
+    def user_stream_last_event_ts(self) -> float:
+        """Epoch detik event user data terakhir (0 = belum ada)."""
+        return self._uds_last_event_ts
 
     @property
     def is_ws_connected(self) -> bool:
@@ -952,44 +1108,169 @@ class BinanceGateway(ExchangeGateway):
         import uuid
         return f"{prefix}-{uuid.uuid4().hex}"[:36]
 
+    # ---------------------------------------------------------------- 
+    # REKONSILIASI STATUS TIDAK PASTI (5xx / timeout / koneksi putus)
+    # ----------------------------------------------------------------
+    # Dokumentasi Binance: HTTP 5xx dan -1007 TIMEOUT berarti "execution
+    # status UNKNOWN", order BISA SAJA sudah masuk matching engine. Karena
+    # itu order placement TIDAK boleh diulang buta; yang benar adalah
+    # menanyakan ulang order lewat origClientOrderId / listClientOrderId.
+
+    # Kode Binance untuk "order memang tidak ada":
+    #   -2011 CANCEL_REJECTED / Unknown order sent
+    #   -2013 NO_SUCH_ORDER    / Order does not exist
+    _NO_SUCH_ORDER_CODES = (-2011, -2013)
+
+    @classmethod
+    def _is_unknown_order_error(cls, exc: Exception) -> bool:
+        """True kalau error Binance berarti order/order-list tidak ada."""
+        code = getattr(exc, "status_code", None)
+        try:
+            code = int(code)
+        except (TypeError, ValueError):
+            code = None
+        if code in cls._NO_SUCH_ORDER_CODES:
+            return True
+        msg = str(getattr(exc, "error_message", "") or exc).upper()
+        return ("UNKNOWN ORDER" in msg
+                or "ORDER DOES NOT EXIST" in msg
+                or "ORDER LIST DOES NOT EXIST" in msg)
+
+    async def _query_order_by_client_id(self, symbol: str,
+                                        client_order_id: str) -> Optional[dict]:
+        """GET /api/v3/order?origClientOrderId=... (None kalau tidak ada)."""
+        try:
+            return await self._rest(self._client.rest_api.get_order,
+                                    symbol=symbol,
+                                    orig_client_order_id=client_order_id)
+        except (BadRequestError, ClientError) as exc:
+            if self._is_unknown_order_error(exc):
+                return None
+            raise
+
+    async def _query_order_list_by_client_id(
+            self, list_client_order_id: str) -> Optional[dict]:
+        """GET /api/v3/orderList?origClientOrderId=... (None kalau tidak ada)."""
+        try:
+            return await self._rest(self._client.rest_api.get_order_list,
+                                    orig_client_order_id=list_client_order_id)
+        except (BadRequestError, ClientError) as exc:
+            if self._is_unknown_order_error(exc):
+                return None
+            raise
+
+    async def _recover_unknown_order(self, symbol: str, client_order_id: str,
+                                     attempts: int = 3,
+                                     delay_s: float = 1.0) -> Optional[dict]:
+        """Cari order yang statusnya tidak pasti; None = order tidak pernah ada."""
+        for i in range(1, attempts + 1):
+            try:
+                resp = await self._query_order_by_client_id(symbol, client_order_id)
+            except Exception as exc:          # noqa: BLE001 - dicoba lagi
+                logger.warning(f"Rekonsiliasi {symbol}/{client_order_id} "
+                               f"percobaan {i}/{attempts} gagal: {exc}")
+                resp = None
+            else:
+                if resp is not None:
+                    return resp
+            if i < attempts:
+                await asyncio.sleep(delay_s * i)
+        return None
+
+    async def _recover_unknown_order_list(self, list_client_order_id: str,
+                                          attempts: int = 3,
+                                          delay_s: float = 1.0) -> Optional[dict]:
+        """Cari OCO yang statusnya tidak pasti; None = order list tidak ada."""
+        for i in range(1, attempts + 1):
+            try:
+                resp = await self._query_order_list_by_client_id(
+                    list_client_order_id)
+            except Exception as exc:          # noqa: BLE001 - dicoba lagi
+                logger.warning(f"Rekonsiliasi OCO {list_client_order_id} "
+                               f"percobaan {i}/{attempts} gagal: {exc}")
+                resp = None
+            else:
+                if resp is not None:
+                    return resp
+            if i < attempts:
+                await asyncio.sleep(delay_s * i)
+        return None
+
+    async def _place_order_with_recovery(self, symbol: str,
+                                         client_order_id: str,
+                                         fn, /, **kwargs) -> dict:
+        """
+        Kirim satu order dan REKONSILIASI bila statusnya tidak pasti.
+
+        retry_transient=False tetap dipakai supaya tidak pernah ada retry
+        buta (risiko ORDER GANDA). Bedanya: saat NetworkError/ServerError
+        (5xx, timeout, koneksi putus) terjadi, order dicari ulang lewat
+        origClientOrderId. Kalau ternyata order SUDAH masuk, responsnya
+        dipakai apa adanya; kalau tidak ada, exception asli dilempar lagi
+        sehingga pemanggil tahu order batal.
+        """
+        try:
+            return await self._rest(fn, retry_transient=False, **kwargs)
+        except (NetworkError, ServerError) as exc:
+            logger.error(
+                "Status order TIDAK PASTI untuk %s (clientOrderId=%s): %s. "
+                "Merekonsiliasi lewat origClientOrderId...",
+                symbol, client_order_id, exc)
+            resp = await self._recover_unknown_order(symbol, client_order_id)
+            if resp is None:
+                logger.error(
+                    "Rekonsiliasi %s/%s: order TIDAK ditemukan di Binance -> "
+                    "dianggap tidak pernah terjadi.", symbol, client_order_id)
+                raise
+            logger.warning(
+                "Rekonsiliasi %s/%s berhasil: order SUDAH ada di Binance "
+                "(status=%s executedQty=%s). Tidak ada order ganda.",
+                symbol, client_order_id, resp.get("status"),
+                resp.get("executedQty"))
+            return resp
+
     async def market_buy(self, symbol: str, quote_qty: float) -> Fill:
-        resp = await self._rest(self._client.rest_api.new_order,
-                                symbol=symbol,
-                                side=NewOrderSideEnum("BUY"),
-                                type=NewOrderTypeEnum("MARKET"),
-                                quote_order_qty=self._dec(math.floor(quote_qty * 100) / 100),  # 2 desimal
-                                new_client_order_id=self._client_order_id("pb-b"),
-                                # FULL wajib: hanya FULL yang menyertakan array
-                                # "fills" (komisi per fill). Dengan RESULT,
-                                # fee_quote selalu 0 sehingga qty posisi tidak
-                                # dikurangi fee beli (fee beli dipotong dari
-                                # base asset bila tidak bayar pakai BNB) dan
-                                # market sell penutup ditolak Binance dengan
-                                # (-2010, 'insufficient balance').
-                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("FULL"),
-                                retry_transient=False)
+        client_order_id = self._client_order_id("pb-b")
+        resp = await self._place_order_with_recovery(
+            symbol, client_order_id,
+            self._client.rest_api.new_order,
+            symbol=symbol,
+            side=NewOrderSideEnum("BUY"),
+            type=NewOrderTypeEnum("MARKET"),
+            quote_order_qty=self._dec(math.floor(quote_qty * 100) / 100),  # 2 desimal
+            new_client_order_id=client_order_id,
+            # FULL wajib: hanya FULL yang menyertakan array "fills" (komisi
+            # per fill). Dengan RESULT, fee_quote selalu 0 sehingga qty posisi
+            # tidak dikurangi fee beli (fee beli dipotong dari base asset bila
+            # tidak bayar pakai BNB) dan market sell penutup ditolak Binance
+            # dengan (-2010, 'insufficient balance').
+            new_order_resp_type=NewOrderNewOrderRespTypeEnum("FULL"))
         return self._fill_from_order(resp, symbol)
 
     async def market_sell(self, symbol: str, qty: float) -> Fill:
-        resp = await self._rest(self._client.rest_api.new_order,
-                                symbol=symbol,
-                                side=NewOrderSideEnum("SELL"),
-                                type=NewOrderTypeEnum("MARKET"),
-                                quantity=self._dec(qty),
-                                new_client_order_id=self._client_order_id("pb-s"),
-                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("FULL"),
-                                retry_transient=False)
+        client_order_id = self._client_order_id("pb-s")
+        resp = await self._place_order_with_recovery(
+            symbol, client_order_id,
+            self._client.rest_api.new_order,
+            symbol=symbol,
+            side=NewOrderSideEnum("SELL"),
+            type=NewOrderTypeEnum("MARKET"),
+            quantity=self._dec(qty),
+            new_client_order_id=client_order_id,
+            new_order_resp_type=NewOrderNewOrderRespTypeEnum("FULL"))
         return self._fill_from_order(resp, symbol)
 
     async def place_limit_buy(self, symbol: str, qty: float, price: float) -> int:
-        resp = await self._rest(self._client.rest_api.new_order,
-                                symbol=symbol,
-                                side=NewOrderSideEnum("BUY"),
-                                type=NewOrderTypeEnum("LIMIT"),
-                                time_in_force=NewOrderTimeInForceEnum("GTC"),
-                                quantity=self._dec(qty), price=self._dec(price),
-                                new_client_order_id=self._client_order_id("pb-l"),
-                                retry_transient=False)
+        client_order_id = self._client_order_id("pb-l")
+        resp = await self._place_order_with_recovery(
+            symbol, client_order_id,
+            self._client.rest_api.new_order,
+            symbol=symbol,
+            side=NewOrderSideEnum("BUY"),
+            type=NewOrderTypeEnum("LIMIT"),
+            time_in_force=NewOrderTimeInForceEnum("GTC"),
+            quantity=self._dec(qty), price=self._dec(price),
+            new_client_order_id=client_order_id)
         return int(_f(resp.get("orderId")))
 
     async def get_order_status(self, symbol: str, order_id: int) -> dict:
@@ -1010,9 +1291,15 @@ class BinanceGateway(ExchangeGateway):
                              symbol=symbol, order_id=order_id)
             return True
         except (BadRequestError, ClientError) as exc:
-            # -2011 "Unknown order sent" = order memang sudah tidak ada
-            logger.debug(f"cancel_order {symbol}#{order_id}: {getattr(exc, 'error_message', exc)}")
-            return True
+            # -2011 "Unknown order sent" / -2013 = order memang sudah tidak ada.
+            # Error lain (mis. -1021 timestamp) BUKAN bukti order sudah batal.
+            if self._is_unknown_order_error(exc):
+                logger.debug(f"cancel_order {symbol}#{order_id}: order sudah "
+                             f"tidak ada ({getattr(exc, 'error_message', exc)})")
+                return True
+            logger.error(f"Gagal cancel order {symbol}#{order_id}: "
+                         f"{getattr(exc, 'error_message', exc)}")
+            return False
         except Exception as exc:
             logger.error(f"Gagal cancel order {symbol}#{order_id}: {exc}")
             return False
@@ -1049,27 +1336,36 @@ class BinanceGateway(ExchangeGateway):
                     order_id=int(_f(resp.get("orderId"))))
 
     # -------------------------------------------------------------- OCO
-    async def place_oco_sell(self, symbol: str, qty: float, tp_price: float,
-                             stop_price: float) -> int:
+    def _oco_use_new_endpoint(self) -> bool:
         """
-        OCO sell klasik (POST /api/v3/order/oco):
-          - leg TP  : LIMIT_MAKER @ tp_price
-          - leg SL  : STOP_LOSS_LIMIT, trigger @ stop_price,
-                      limit @ stop_price*(1-buffer) supaya tetap terisi
-                      saat pasar jatuh cepat.
+        Pilih endpoint OCO.
 
-        Semua harga harus mengikuti PRICE_FILTER Binance. Executor sudah
-        membulatkan TP dan stop trigger, tetapi stop-limit price dihitung di
-        sini dari buffer sehingga WAJIB ikut dibulatkan ke tick_size juga.
-        Tanpa ini Binance dapat menolak OCO dengan:
+        `POST /api/v3/order/oco` (SDK: `order_oco`) DEPRECATED sejak
+        2024-04-02 dan sudah dihapus dari dokumentasi SPOT Testnet sejak
+        2024-04-04. Penggantinya `POST /api/v3/orderList/oco`
+        (SDK: `order_list_oco`).
+
+        Bot memakai endpoint baru bila SDK menyediakannya, dan otomatis
+        kembali ke endpoint lama jika tidak (mis. SDK versi lama) atau bila
+        operator memaksa lewat `execution.oco_legacy_endpoint: true`.
+        """
+        if self._oco_force_legacy:
+            return False
+        return bool(_ORDERLIST_OCO_ENUMS) and hasattr(
+            self._client.rest_api, "order_list_oco")
+
+    def _oco_prices(self, symbol: str, qty: float, tp_price: float,
+                    stop_price: float) -> tuple:
+        """
+        Bulatkan qty dan ketiga harga leg OCO sesuai LOT_SIZE/PRICE_FILTER.
+
+        Executor sudah membulatkan TP dan stop trigger, tetapi harga
+        stop-limit dihitung di sini dari buffer sehingga WAJIB ikut
+        dibulatkan. Tanpa ini Binance menolak dengan
         (-1013, 'Filter failure: PRICE_FILTER').
         """
         filters = self._symbol_filters.get(symbol)
         if filters:
-            # Qty juga wajib mengikuti LOT_SIZE: chunk terakhir dari executor
-            # berisi sisa persis (mis. 0.32967) yang bukan kelipatan step
-            # sehingga tanpa pembulatan Binance menolak dengan
-            # (-1013, 'Filter failure: LOT_SIZE').
             qty = filters.round_qty(qty)
             tp_price = filters.round_price(tp_price, "up")
             stop_price = filters.round_price(stop_price, "down")
@@ -1079,27 +1375,136 @@ class BinanceGateway(ExchangeGateway):
             )
         else:
             sl_limit = stop_price * (1.0 - self._sl_limit_buffer_pct / 100.0)
+        return qty, tp_price, stop_price, sl_limit
 
-        resp = await self._rest(self._client.rest_api.order_oco,
-                                symbol=symbol,
-                                side=OrderOcoSideEnum("SELL"),
-                                quantity=self._dec(qty),
-                                price=self._dec(tp_price),
-                                stop_price=self._dec(stop_price),
-                                stop_limit_price=self._dec(sl_limit),
-                                list_client_order_id=self._client_order_id("pb-oco"),
-                                stop_limit_time_in_force=OrderOcoStopLimitTimeInForceEnum("GTC"),
-                                retry_transient=False)
+    async def place_oco_sell(self, symbol: str, qty: float, tp_price: float,
+                             stop_price: float) -> int:
+        """
+        OCO sell:
+          - leg ATAS (TP) : LIMIT_MAKER @ tp_price
+          - leg BAWAH (SL): STOP_LOSS_LIMIT, trigger @ stop_price,
+                            limit @ stop_price*(1-buffer) supaya tetap terisi
+                            saat pasar jatuh cepat.
+
+        Dikirim lewat `POST /api/v3/orderList/oco` bila tersedia, dengan
+        fallback otomatis ke `POST /api/v3/order/oco` yang deprecated.
+        Kedua jalur memakai `listClientOrderId` yang sama sehingga status
+        yang tidak pasti (5xx/timeout) tetap bisa direkonsiliasi.
+        """
+        qty, tp_price, stop_price, sl_limit = self._oco_prices(
+            symbol, qty, tp_price, stop_price)
+
+        list_client_order_id = self._client_order_id("pb-oco")
+        pakai_baru = self._oco_use_new_endpoint()
+        if pakai_baru:
+            fn = self._client.rest_api.order_list_oco
+            kwargs = dict(
+                symbol=symbol,
+                side=OrderListOcoSideEnum("SELL"),
+                quantity=self._dec(qty),
+                above_type=OrderListOcoAboveTypeEnum("LIMIT_MAKER"),
+                above_price=self._dec(tp_price),
+                below_type=OrderListOcoBelowTypeEnum("STOP_LOSS_LIMIT"),
+                below_stop_price=self._dec(stop_price),
+                below_price=self._dec(sl_limit),
+                below_time_in_force=OrderListOcoBelowTimeInForceEnum("GTC"),
+                list_client_order_id=list_client_order_id,
+            )
+        else:
+            fn = self._client.rest_api.order_oco
+            kwargs = dict(
+                symbol=symbol,
+                side=OrderOcoSideEnum("SELL"),
+                quantity=self._dec(qty),
+                price=self._dec(tp_price),
+                stop_price=self._dec(stop_price),
+                stop_limit_price=self._dec(sl_limit),
+                list_client_order_id=list_client_order_id,
+                stop_limit_time_in_force=OrderOcoStopLimitTimeInForceEnum("GTC"),
+            )
+
+        try:
+            resp = await self._rest(fn, retry_transient=False, **kwargs)
+        except (NetworkError, ServerError) as exc:
+            # Status OCO TIDAK PASTI. Tanpa rekonsiliasi, pemanggil akan
+            # menganggap OCO gagal lalu menutup posisi market, padahal OCO
+            # bisa saja sudah aktif -> sell ganda / saldo terkunci.
+            logger.error(
+                "Status OCO TIDAK PASTI untuk %s (listClientOrderId=%s): %s. "
+                "Merekonsiliasi lewat origClientOrderId...",
+                symbol, list_client_order_id, exc)
+            resp = await self._recover_unknown_order_list(list_client_order_id)
+            if resp is None:
+                logger.error(
+                    "Rekonsiliasi OCO %s/%s: order list TIDAK ditemukan -> "
+                    "dianggap tidak pernah terpasang.",
+                    symbol, list_client_order_id)
+                raise
+            logger.warning(
+                "Rekonsiliasi OCO %s/%s berhasil: order list SUDAH aktif "
+                "(orderListId=%s).",
+                symbol, list_client_order_id, resp.get("orderListId"))
+        except (BadRequestError, ClientError) as exc:
+            # Endpoint baru bisa ditolak server lama/sandbox tertentu.
+            # Turun ke endpoint lama SEKALI saja, dan hanya bila error
+            # menyangkut endpoint/parameter, bukan penolakan order.
+            if pakai_baru and self._oco_endpoint_unsupported(exc):
+                logger.warning(
+                    "Endpoint orderList/oco ditolak (%s). Memakai endpoint "
+                    "lama order/oco untuk %s. Periksa versi SDK.", exc, symbol)
+                self._oco_force_legacy = True
+                return await self.place_oco_sell(symbol, qty, tp_price,
+                                                 stop_price)
+            raise
         return int(_f(resp.get("orderListId")))
 
+    @staticmethod
+    def _oco_endpoint_unsupported(exc: Exception) -> bool:
+        """
+        True hanya untuk error yang menandakan endpoint atau parameternya
+        tidak dikenal server (-1100/-1101/-1102/-1104/-1130 atau HTTP 404).
+
+        Penolakan order yang sah (mis. -2010 saldo kurang, -1013 filter,
+        -1121 simbol salah) TIDAK boleh memicu fallback: itu bukan masalah
+        endpoint dan mengulanginya di endpoint lama hanya membuang weight
+        serta bisa memasang OCO yang tidak diinginkan.
+        """
+        kode = getattr(exc, "status_code", None)
+        try:
+            kode = int(kode)
+        except (TypeError, ValueError):
+            kode = None
+        if kode in (-1100, -1101, -1102, -1104, -1130, 404):
+            return True
+        pesan = str(getattr(exc, "error_message", "") or exc).lower()
+        return ("unknown parameter" in pesan
+                or "mandatory parameter" in pesan
+                or "not found" in pesan
+                or "unknown method" in pesan)
+
     async def cancel_oco(self, symbol: str, order_list_id: int) -> bool:
+        """
+        Batalkan OCO. True HANYA bila OCO benar-benar sudah tidak aktif.
+
+        PENTING: sebelumnya semua BadRequestError/ClientError dianggap
+        sukses. Itu menyamarkan kegagalan nyata (mis. -1021 timestamp,
+        -1100 parameter, -1003 too many requests) sehingga bot mengira OCO
+        sudah batal lalu memasang OCO baru / menjual market di atas OCO yang
+        MASIH HIDUP -> penjualan ganda atau saldo terkunci. Kini hanya kode
+        "order memang tidak ada" (-2011/-2013) yang dianggap sukses.
+        """
         try:
             await self._rest(self._client.rest_api.delete_order_list,
                              symbol=symbol, order_list_id=order_list_id)
             return True
         except (BadRequestError, ClientError) as exc:
-            logger.debug(f"cancel_oco {symbol}#{order_list_id}: {getattr(exc, 'error_message', exc)}")
-            return True
+            if self._is_unknown_order_error(exc):
+                logger.debug(f"cancel_oco {symbol}#{order_list_id}: order list "
+                             f"sudah tidak ada ({getattr(exc, 'error_message', exc)})")
+                return True
+            logger.error(f"Gagal cancel OCO {symbol}#{order_list_id}: "
+                         f"{getattr(exc, 'error_message', exc)}")
+            return False
         except Exception as exc:
             logger.error(f"Gagal cancel OCO {symbol}#{order_list_id}: {exc}")
             return False

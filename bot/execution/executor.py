@@ -108,6 +108,62 @@ class Executor:
         # memasang ulang OCO bisa saling serobot dengan tombol "tutup posisi"
         # di dashboard -> OCO lama tidak dibatalkan -> terisi dua kali.
         self._oco_lock = asyncio.Lock()
+        # Simbol yang PERLU direkonsiliasi segera karena ada event akun
+        # (User Data Stream) yang menyentuh order jual kita. Dipakai position
+        # manager untuk melewati throttle reconcile_sec. Event dipakai sebagai
+        # PEMICU, bukan sumber kebenaran: status akhir tetap dibaca lewat
+        # REST get_oco_status supaya tidak ada dua parser yang bisa berbeda.
+        self.urgent_reconcile: set[str] = set()
+        self._user_event_count: int = 0
+
+    # ==================================================================
+    # EVENT AKUN (USER DATA STREAM)
+    # ==================================================================
+    # Nilai kolom "X" (status order) pada executionReport yang berarti order
+    # jual kita sudah tidak aktif lagi atau baru saja terisi sebagian.
+    _UDS_STATUS_PENTING = frozenset({
+        "FILLED", "PARTIALLY_FILLED", "CANCELED", "EXPIRED", "REJECTED",
+        "EXPIRED_IN_MATCH",
+    })
+
+    def note_user_event(self, event: dict) -> None:
+        """
+        Terima satu event User Data Stream dan tandai simbolnya untuk
+        rekonsiliasi segera.
+
+        Callback ini dipanggil dari thread/loop SDK, jadi harus CEPAT dan
+        tidak boleh melempar exception. Ia sengaja TIDAK mengubah state
+        posisi: yang diubah hanya penanda "segera cek simbol ini", sehingga
+        satu-satunya jalur yang menulis PnL tetap `reconcile_oco` lewat REST.
+        """
+        try:
+            if not isinstance(event, dict):
+                return
+            jenis = event.get("e")
+            simbol = event.get("s")
+            if not simbol:
+                return
+            if jenis == "executionReport":
+                if event.get("S") != "SELL":
+                    return
+                if str(event.get("X") or "") not in self._UDS_STATUS_PENTING:
+                    return
+            elif jenis != "listStatus":
+                return
+            self._user_event_count += 1
+            self.urgent_reconcile.add(str(simbol))
+            logger.info(
+                "Event akun %s %s (status=%s) -> rekonsiliasi segera",
+                jenis, simbol, event.get("X") or event.get("l"))
+        except Exception as exc:      # jangan pernah mematikan callback SDK
+            logger.error("note_user_event gagal: %s", exc)
+
+    def take_urgent_symbols(self) -> set:
+        """Ambil dan kosongkan daftar simbol yang perlu dicek segera."""
+        if not self.urgent_reconcile:
+            return set()
+        simbol, self.urgent_reconcile = self.urgent_reconcile, set()
+        return simbol
 
     # ==================================================================
     # ENTRY
@@ -198,6 +254,19 @@ class Executor:
                 fill = await self.gateway.market_buy(
                     symbol, round(sizing.notional, 2))
         except Exception as exc:
+            code, _cause = classify_oco_failure(exc)
+            if code == "NETWORK":
+                # Gateway sudah mencoba rekonsiliasi lewat origClientOrderId
+                # dan tetap tidak menemukan order. Tetap catat keras supaya
+                # operator memverifikasi manual bila kebetulan ada aset yatim.
+                detail = (f"{symbol}: order entry gagal karena gangguan "
+                          f"jaringan/server. Rekonsiliasi clientOrderId tidak "
+                          f"menemukan order, jadi posisi TIDAK dicatat. "
+                          f"Verifikasi manual di Binance bila ragu. Raw: "
+                          f"{_short(_error_text(exc))}")
+                self.db.record_event("ERROR", "ENTRY_UNKNOWN_STATUS", detail, symbol)
+                logger.error(detail)
+                return None
             self.db.record_event("ERROR", "ENTRY_FAILED",
                                  f"{symbol}: {exc}", symbol)
             logger.error(f"Order entry {symbol} GAGAL: {exc}")
@@ -359,6 +428,30 @@ class Executor:
                             pos, exit_price=st["avg_price"], reason=reason)
                         break
 
+    async def _cancel_oco_confirmed(self, symbol: str,
+                                    order_list_id: int) -> bool:
+        """
+        Batalkan OCO dan PASTIKAN hasilnya.
+
+        gateway.cancel_oco() kini hanya mengembalikan True bila pembatalan
+        benar-benar berhasil (atau order list memang sudah tidak ada). Bila
+        gagal, status OCO dicek sekali lagi: kalau sudah selesai (terisi /
+        batal dari sisi lain) pembatalan dianggap tuntas. Kalau tidak bisa
+        dipastikan, return False supaya pemanggil TIDAK menjual di atas OCO
+        yang masih hidup.
+        """
+        try:
+            if await self.gateway.cancel_oco(symbol, order_list_id):
+                return True
+        except Exception as exc:
+            logger.error(f"cancel_oco {symbol}#{order_list_id} error: {exc}")
+        try:
+            st = await self.gateway.get_oco_status(symbol, order_list_id)
+        except Exception as exc:
+            logger.error(f"Verifikasi OCO {symbol}#{order_list_id} gagal: {exc}")
+            return False
+        return bool(st.get("done"))
+
     async def place_exit_orders(self, pos: Position, force: bool = False) -> bool:
         """Versi publik (dengan lock) dari _place_exit_orders_locked."""
         async with self._oco_lock:
@@ -384,10 +477,28 @@ class Executor:
             return True   # ternyata posisi sudah selesai saat rekonsiliasi
 
         # --- 2. batalkan OCO aktif yang tersisa (akan diganti) ---
+        # Kalau pembatalan TIDAK bisa dipastikan, OCO lama mungkin masih
+        # hidup. Memasang OCO baru di atasnya berarti dua order list menjual
+        # qty yang sama -> oversell / saldo terkunci. Maka: batal total,
+        # posisi tetap dijaga OCO lama.
         for chunk in pos.chunks:
             if chunk.oco_list_id and chunk.status == "PENDING":
-                await self.gateway.cancel_oco(pos.symbol, chunk.oco_list_id)
-                chunk.oco_list_id = None
+                if await self._cancel_oco_confirmed(pos.symbol, chunk.oco_list_id):
+                    chunk.oco_list_id = None
+                else:
+                    pos.last_oco_sync = now_ms()
+                    detail = (
+                        f"{pos.symbol}: pembatalan OCO #{chunk.oco_list_id} tidak "
+                        "bisa dipastikan. Pemasangan OCO baru DIBATALKAN agar "
+                        "tidak ada dua OCO untuk qty yang sama; OCO lama "
+                        "dianggap masih menjaga posisi."
+                    )
+                    logger.error(detail)
+                    pos.oco_failure_code = "CANCEL_UNCONFIRMED"
+                    pos.oco_failure_detail = detail
+                    self.db.record_event("ERROR", "OCO_CANCEL_UNCONFIRMED",
+                                         detail, pos.symbol)
+                    return False
 
         # --- 3. pasang OCO baru hanya untuk chunk yang benar-benar pending,
         #        dengan qty dijepit ke sisa posisi (anti oversell) ---
@@ -436,6 +547,14 @@ class Executor:
             return
         ok = await self.place_exit_orders(pos)
         if not ok and any(c.status == "PENDING" for c in pos.chunks):
+            if any(c.oco_list_id for c in pos.chunks if c.status == "PENDING"):
+                # OCO lama masih terpasang di exchange (SL lama tetap aktif).
+                # Menutup paksa di sini justru berisiko sell ganda.
+                logger.error(
+                    "%s: re-place OCO gagal tetapi OCO lama masih aktif - "
+                    "posisi TIDAK ditutup paksa, SL lama tetap menjaga.",
+                    pos.symbol)
+                return
             await self._close_after_oco_failure(pos, "re-place OCO")
 
     def _record_oco_failure(self, pos: Position, chunk: ExitChunk, qty: float,
@@ -570,10 +689,25 @@ class Executor:
             # 2. batalkan SEMUA OCO posisi ini supaya tidak ikut tereksekusi
             #    (dilakukan dalam lock agar tidak berpacu dengan re-place
             #    dari breakeven/trailing yang berjalan bersamaan)
+            status_sebelum = [c.status for c in pos.chunks]
             if pos.exit_mode == "oco" and not pos.oco_fallback:
                 for chunk in pos.chunks:
                     if chunk.oco_list_id:
-                        await self.gateway.cancel_oco(pos.symbol, chunk.oco_list_id)
+                        if not await self._cancel_oco_confirmed(
+                                pos.symbol, chunk.oco_list_id):
+                            # OCO mungkin masih hidup -> market sell sekarang
+                            # bisa menjual qty yang sama dua kali.
+                            detail = (
+                                f"{pos.symbol}: penutupan DIBATALKAN karena OCO "
+                                f"#{chunk.oco_list_id} tidak bisa dipastikan "
+                                "sudah batal (risiko sell ganda). Coba lagi "
+                                "nanti atau batalkan order manual di Binance."
+                            )
+                            logger.error(detail)
+                            self.db.record_event(
+                                "ERROR", "CLOSE_ABORTED_OCO_ACTIVE",
+                                detail, pos.symbol)
+                            return False
                         chunk.oco_list_id = None
                     chunk.status = "CANCELED" if chunk.status == "PENDING" else chunk.status
 
@@ -588,12 +722,49 @@ class Executor:
                 self.db.record_event("ERROR", "CLOSE_FAILED",
                                      f"{pos.symbol}: {exc}", pos.symbol)
                 logger.error(f"Gagal tutup posisi #{pos.trade_id} {pos.symbol}: {exc}")
+                # OCO sudah dibatalkan tetapi penjualan GAGAL: tanpa langkah
+                # di bawah, posisi tetap terbuka TANPA proteksi apa pun dan
+                # tidak ada jalur yang memasang ulang OCO (semua chunk sudah
+                # berstatus CANCELED). Kembalikan status chunk lalu pasang
+                # ulang proteksi exchange.
+                await self._rearm_after_failed_close(pos, status_sebelum)
                 return False
 
             await self.partial_exit(pos, fill.qty, fill.price, reason, fill.fee_quote)
             if fraction >= 1.0:
                 await self._finalize_if_done(pos, fill.price, reason, force=True)
             return True
+
+    async def _rearm_after_failed_close(self, pos: Position,
+                                        status_sebelum: list[str]) -> None:
+        """Pulihkan proteksi exchange setelah market sell penutup GAGAL.
+
+        Dipanggil dengan self._oco_lock DIPEGANG (dari close_position).
+        """
+        if pos.status != "OPEN":
+            return
+        for chunk, lama in zip(pos.chunks, status_sebelum):
+            if lama == "PENDING" and chunk.status == "CANCELED":
+                chunk.status = "PENDING"
+        if pos.exit_mode != "oco" or pos.oco_fallback:
+            return
+        try:
+            ok = await self._place_exit_orders_locked(pos)
+        except Exception as exc:                      # noqa: BLE001
+            ok = False
+            logger.error(f"Gagal memasang ulang OCO setelah close gagal "
+                         f"{pos.symbol}: {exc}")
+        if ok:
+            msg = (f"{pos.symbol}: market sell penutup gagal, OCO proteksi "
+                   f"dipasang ulang (SL {pos.stop_loss:.10g}).")
+            logger.warning(msg)
+            self.db.record_event("WARNING", "EXIT_ORDERS_REARMED", msg, pos.symbol)
+        else:
+            msg = (f"{pos.symbol}: POSISI TANPA PROTEKSI - market sell gagal "
+                   "dan OCO tidak bisa dipasang ulang. Perlu tindakan manual "
+                   "di Binance.")
+            logger.error(msg)
+            self.db.record_event("ERROR", "POSITION_UNPROTECTED", msg, pos.symbol)
 
     async def _handle_close_insufficient_balance(
             self, pos: Position, requested_qty: float, reason: str,
