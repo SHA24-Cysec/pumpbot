@@ -86,6 +86,19 @@ def size_position(
         return SizingResult(0, 0, 0, 0,
                             f"notional {notional:.2f} < MIN_NOTIONAL {filters.min_notional}")
 
+    # Leg SL dari OCO dicek Binance terhadap NOTIONAL juga (qty * stop_price).
+    # Tanpa guard ini akun kecil bisa lolos entry (qty * entry >= minNotional)
+    # tetapi OCO/market-sell exit ditolak karena qty * SL < minNotional,
+    # sehingga posisi terjebak tanpa proteksi dan tidak bisa dijual via API.
+    # Buffer 1% menutup fee beli yang dipotong dari base asset.
+    sl_notional = qty * stop
+    if stop > 0 and sl_notional * 0.99 < filters.min_notional:
+        return SizingResult(
+            0, 0, 0, 0,
+            f"notional di harga SL {sl_notional:.2f} terlalu dekat/di bawah "
+            f"MIN_NOTIONAL {filters.min_notional} (exit OCO akan ditolak); "
+            f"butuh saldo lebih besar")
+
     actual_risk = qty * (entry - stop)
     return SizingResult(
         qty=qty,

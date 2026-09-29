@@ -925,9 +925,15 @@ class BinanceGateway(ExchangeGateway):
 
         Membantu rekonsiliasi manual via GET /api/v3/order?origClientOrderId
         bila respons order hilang karena masalah jaringan.
+
+        Binance mewajibkan pola ^[a-zA-Z0-9-_]{1,36}$ untuk clientOrderId
+        dan listClientOrderId (maksimal 36 karakter). Panjang total WAJIB
+        dipotong ke 36; tanpa ini prefix panjang seperti "pb-oco" menghasilkan
+        37 karakter dan Binance menolak dengan:
+        (-1100, "Illegal characters found in parameter 'listClientOrderId'").
         """
         import uuid
-        return f"{prefix}-{uuid.uuid4().hex[:30]}"
+        return f"{prefix}-{uuid.uuid4().hex}"[:36]
 
     async def market_buy(self, symbol: str, quote_qty: float) -> Fill:
         resp = await self._rest(self._client.rest_api.new_order,
@@ -936,7 +942,14 @@ class BinanceGateway(ExchangeGateway):
                                 type=NewOrderTypeEnum("MARKET"),
                                 quote_order_qty=math.floor(quote_qty * 100) / 100,  # 2 desimal
                                 new_client_order_id=self._client_order_id("pb-b"),
-                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("RESULT"),
+                                # FULL wajib: hanya FULL yang menyertakan array
+                                # "fills" (komisi per fill). Dengan RESULT,
+                                # fee_quote selalu 0 sehingga qty posisi tidak
+                                # dikurangi fee beli (fee beli dipotong dari
+                                # base asset bila tidak bayar pakai BNB) dan
+                                # market sell penutup ditolak Binance dengan
+                                # (-2010, 'insufficient balance').
+                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("FULL"),
                                 retry_transient=False)
         return self._fill_from_order(resp, symbol)
 
@@ -947,7 +960,7 @@ class BinanceGateway(ExchangeGateway):
                                 type=NewOrderTypeEnum("MARKET"),
                                 quantity=qty,
                                 new_client_order_id=self._client_order_id("pb-s"),
-                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("RESULT"),
+                                new_order_resp_type=NewOrderNewOrderRespTypeEnum("FULL"),
                                 retry_transient=False)
         return self._fill_from_order(resp, symbol)
 
@@ -1036,6 +1049,11 @@ class BinanceGateway(ExchangeGateway):
         """
         filters = self._symbol_filters.get(symbol)
         if filters:
+            # Qty juga wajib mengikuti LOT_SIZE: chunk terakhir dari executor
+            # berisi sisa persis (mis. 0.32967) yang bukan kelipatan step
+            # sehingga tanpa pembulatan Binance menolak dengan
+            # (-1013, 'Filter failure: LOT_SIZE').
+            qty = filters.round_qty(qty)
             tp_price = filters.round_price(tp_price, "up")
             stop_price = filters.round_price(stop_price, "down")
             sl_limit = filters.round_price(
