@@ -920,6 +920,23 @@ class BinanceGateway(ExchangeGateway):
 
     # -------------------------------------------------------------- trading
     @staticmethod
+    def _dec(value: float) -> str:
+        """Format angka ke string desimal polos untuk parameter API.
+
+        WAJIB dipakai untuk semua quantity/price yang dikirim ke Binance.
+        SDK meng-urlencode float via str(), dan Python menulis float kecil
+        dengan notasi ilmiah: str(0.00007) = '7e-05'. Binance menolaknya
+        dengan (-1100, "Illegal characters found in parameter 'quantity';
+        legal range is '^([0-9]{1,20})(\\.[0-9]{1,20})?$'"). String desimal
+        polos diteruskan urlencode tanpa diubah, jadi selalu aman.
+        """
+        from decimal import Decimal
+        s = format(Decimal(repr(float(value))), "f")
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s or "0"
+
+    @staticmethod
     def _client_order_id(prefix: str = "pb") -> str:
         """ID order unik (maks 36 karakter, charset sah Binance).
 
@@ -940,7 +957,7 @@ class BinanceGateway(ExchangeGateway):
                                 symbol=symbol,
                                 side=NewOrderSideEnum("BUY"),
                                 type=NewOrderTypeEnum("MARKET"),
-                                quote_order_qty=math.floor(quote_qty * 100) / 100,  # 2 desimal
+                                quote_order_qty=self._dec(math.floor(quote_qty * 100) / 100),  # 2 desimal
                                 new_client_order_id=self._client_order_id("pb-b"),
                                 # FULL wajib: hanya FULL yang menyertakan array
                                 # "fills" (komisi per fill). Dengan RESULT,
@@ -958,7 +975,7 @@ class BinanceGateway(ExchangeGateway):
                                 symbol=symbol,
                                 side=NewOrderSideEnum("SELL"),
                                 type=NewOrderTypeEnum("MARKET"),
-                                quantity=qty,
+                                quantity=self._dec(qty),
                                 new_client_order_id=self._client_order_id("pb-s"),
                                 new_order_resp_type=NewOrderNewOrderRespTypeEnum("FULL"),
                                 retry_transient=False)
@@ -970,7 +987,7 @@ class BinanceGateway(ExchangeGateway):
                                 side=NewOrderSideEnum("BUY"),
                                 type=NewOrderTypeEnum("LIMIT"),
                                 time_in_force=NewOrderTimeInForceEnum("GTC"),
-                                quantity=qty, price=price,
+                                quantity=self._dec(qty), price=self._dec(price),
                                 new_client_order_id=self._client_order_id("pb-l"),
                                 retry_transient=False)
         return int(_f(resp.get("orderId")))
@@ -1066,10 +1083,10 @@ class BinanceGateway(ExchangeGateway):
         resp = await self._rest(self._client.rest_api.order_oco,
                                 symbol=symbol,
                                 side=OrderOcoSideEnum("SELL"),
-                                quantity=qty,
-                                price=tp_price,
-                                stop_price=stop_price,
-                                stop_limit_price=sl_limit,
+                                quantity=self._dec(qty),
+                                price=self._dec(tp_price),
+                                stop_price=self._dec(stop_price),
+                                stop_limit_price=self._dec(sl_limit),
                                 list_client_order_id=self._client_order_id("pb-oco"),
                                 stop_limit_time_in_force=OrderOcoStopLimitTimeInForceEnum("GTC"),
                                 retry_transient=False)
