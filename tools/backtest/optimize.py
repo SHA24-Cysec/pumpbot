@@ -38,6 +38,7 @@ from bot.models import Candle
 
 from tools.backtest.download import DATA_DIR, INTERVAL_MS, csv_path, read_csv
 from tools.backtest.engine import Params, simulate_portfolio
+from tools.backtest.estimate import BYTES_PER_CANDLE
 from tools.backtest.progress import ProgressUI
 from tools.backtest.signals import Entry, scan_all
 from tools.backtest.util import load_backtest_config, rows_to_candles
@@ -342,6 +343,62 @@ def score_results(rows: list[dict], w_pnl: float, w_pf: float, w_dd: float,
 _CTX: dict = {}
 
 
+@dataclass(frozen=True)
+class DataSpec:
+    """
+    Resep pemuatan data untuk proses pekerja.
+
+    Objeknya kecil (hanya nama simbol dan angka) sehingga murah dikirim
+    lewat pickle. Pekerja memakai resep ini untuk memuat candle SENDIRI
+    dari cache CSV, jadi dataset tidak perlu dikirim dari proses induk.
+
+    cut_ms adalah batas waktu split kronologis yang SUDAH dihitung induk
+    (lihat split_chronological). Pekerja hanya memfilter, tidak menghitung
+    ulang batasnya, supaya potongan datanya identik dengan milik induk.
+    """
+    symbols: tuple
+    interval: str
+    days: int
+    data_dir: str
+    cut_ms: Optional[int] = None
+    bagian: str = "all"          # "all" | "is" | "oos"
+
+
+def load_data_spec(spec: DataSpec) -> dict[str, list[Candle]]:
+    """
+    Muat candle sesuai resep, langsung terpotong ke bagian yang diminta.
+
+    Pemotongan dilakukan pada level baris CSV (sebelum objek Candle
+    dibuat) sehingga pekerja tidak pernah memegang dataset penuh di RAM.
+    """
+    out: dict[str, list[Candle]] = {}
+    if spec.symbols:
+        paths = [csv_path(s, spec.interval, spec.data_dir)
+                 for s in spec.symbols]
+    else:
+        paths = sorted(glob.glob(
+            os.path.join(spec.data_dir, f"*_{spec.interval}.csv")))
+
+    for path in paths:
+        rows = read_csv(path)
+        if not rows:
+            continue
+        if spec.days > 0:
+            cutoff = rows[-1]["open_time"] - spec.days * 86_400_000
+            rows = [r for r in rows if r["open_time"] >= cutoff]
+        if spec.cut_ms is not None and spec.bagian in ("is", "oos"):
+            if spec.bagian == "is":
+                rows = [r for r in rows if r["open_time"] <= spec.cut_ms]
+            else:
+                rows = [r for r in rows if r["open_time"] > spec.cut_ms]
+        if len(rows) < 2:
+            continue
+        symbol = os.path.basename(path).rsplit(f"_{spec.interval}.csv", 1)[0]
+        out[symbol] = rows_to_candles(rows)
+        del rows
+    return out
+
+
 def _init_worker(entries: list[Entry], data: dict, cfg: Config,
                  start_equity: float, risk_pct: Optional[float],
                  presorted: bool) -> None:
@@ -349,6 +406,21 @@ def _init_worker(entries: list[Entry], data: dict, cfg: Config,
     _CTX.update(entries=entries, data=data, cfg=cfg,
                 start_equity=start_equity, risk_pct=risk_pct,
                 presorted=presorted)
+
+
+def _init_worker_spec(entries: list[Entry], spec: DataSpec, cfg: Config,
+                      start_equity: float, risk_pct: Optional[float],
+                      presorted: bool) -> None:
+    """
+    Initializer hemat memori: pekerja MEMUAT SENDIRI candle dari cache CSV.
+
+    Versi lama mengirim seluruh dict candle lewat initargs, sehingga pada
+    metode start `spawn` (bawaan Windows) tiap pekerja harus meng-unpickle
+    salinan penuh. Pada dataset besar itu berakhir dengan MemoryError di
+    proses anak, tepat saat pool dinyalakan.
+    """
+    _init_worker(entries, load_data_spec(spec), cfg, start_equity, risk_pct,
+                 presorted)
 
 
 def _run_combo(params: Params) -> dict:
@@ -360,17 +432,60 @@ def _run_combo(params: Params) -> dict:
     return {"params": params, "metrics": res.metrics}
 
 
+def estimasi_bytes_data(data: dict[str, list[Candle]]) -> int:
+    """Perkiraan jejak RAM satu salinan dataset candle (byte)."""
+    return sum(len(c) for c in data.values()) * BYTES_PER_CANDLE
+
+
+def batasi_workers_ram(diminta: int, bytes_per_worker: int) -> tuple:
+    """
+    Kurangi jumlah pekerja agar muat di RAM yang benar-benar tersedia.
+
+    Tiap pekerja adalah proses terpisah dengan salinan datanya sendiri
+    (metode start `spawn` di Windows dan macOS tidak punya copy-on-write).
+    Tanpa batas ini, pool yang terlalu besar mati dengan MemoryError saat
+    dinyalakan, setelah fase scan yang panjang selesai.
+
+    Mengembalikan (jumlah_pekerja, alasan). alasan kosong = tidak dibatasi.
+    """
+    if diminta <= 1 or bytes_per_worker <= 0:
+        return diminta, ""
+    try:
+        from tools.backtest.estimate import ram_mesin
+        _total, tersedia = ram_mesin()
+    except Exception:
+        return diminta, ""
+    if not tersedia:
+        return diminta, ""
+    # Sisakan 25% ruang untuk interpreter, OS, dan lonjakan sesaat.
+    anggaran = int(tersedia * 0.75)
+    muat = max(1, anggaran // bytes_per_worker)
+    if muat >= diminta:
+        return diminta, ""
+    return muat, (
+        f"pekerja dikurangi {diminta} -> {muat} agar muat di RAM "
+        f"(tersedia {tersedia / 1e9:.1f} GB, perkiraan {bytes_per_worker / 1e9:.2f} GB "
+        f"per pekerja)")
+
+
 def run_grid(grid: list[Params], entries: list[Entry],
              data: dict[str, list[Candle]], cfg: Config,
              start_equity: float = 1000.0, risk_pct: Optional[float] = None,
              workers: int = 1,
              progress_cb: Optional[Callable[[int], None]] = None,
-             presorted: bool = False) -> list[dict]:
+             presorted: bool = False,
+             data_spec: Optional[DataSpec] = None,
+             log_cb: Optional[Callable[[str], None]] = None) -> list[dict]:
     """Jalankan seluruh kombinasi grid, serial atau paralel.
 
     progress_cb bila ada dipanggil tiap satu kombinasi selesai dihitung.
     presorted=True aman bila entries keluaran scan_all (sudah terurut waktu),
     dan menghemat sort ulang per kombinasi pada himpunan entry besar.
+
+    data_spec bila diisi membuat tiap pekerja MEMUAT SENDIRI candle dari
+    cache CSV, bukan menerimanya lewat pickle. Ini menghilangkan transfer
+    dataset raksasa antar proses yang menjadi penyebab MemoryError pada
+    metode start `spawn`.
     """
     if workers <= 1 or len(grid) <= 1:
         _init_worker(entries, data, cfg, start_equity, risk_pct, presorted)
@@ -382,15 +497,44 @@ def run_grid(grid: list[Params], entries: list[Entry],
         return out
 
     max_workers = min(workers, len(grid), (os.cpu_count() or 1) * 2)
+    max_workers, alasan = batasi_workers_ram(max_workers,
+                                             estimasi_bytes_data(data))
+    if alasan and log_cb:
+        log_cb(alasan)
+    if max_workers <= 1:
+        return run_grid(grid, entries, data, cfg, start_equity, risk_pct,
+                        workers=1, progress_cb=progress_cb,
+                        presorted=presorted)
+
+    if data_spec is not None:
+        inisialisasi = _init_worker_spec
+        muatan = (entries, data_spec, cfg, start_equity, risk_pct, presorted)
+    else:
+        inisialisasi = _init_worker
+        muatan = (entries, data, cfg, start_equity, risk_pct, presorted)
+
     out = []
-    with ProcessPoolExecutor(
-            max_workers=max_workers, initializer=_init_worker,
-            initargs=(entries, data, cfg, start_equity, risk_pct,
-                      presorted)) as pool:
-        for res in pool.map(_run_combo, grid, chunksize=4):
-            out.append(res)
-            if progress_cb:
-                progress_cb(1)
+    try:
+        with ProcessPoolExecutor(
+                max_workers=max_workers, initializer=inisialisasi,
+                initargs=muatan) as pool:
+            for res in pool.map(_run_combo, grid, chunksize=4):
+                out.append(res)
+                if progress_cb:
+                    progress_cb(1)
+    except MemoryError:
+        # Kehabisan RAM saat menyalakan pool. Lebih baik lambat daripada
+        # kehilangan seluruh hasil fase scan yang sudah berjam-jam.
+        pesan = ("RAM tidak cukup untuk pekerja paralel. Grid exit "
+                 "dilanjutkan dengan satu proses (lebih lambat).")
+        logger_cb = log_cb or (lambda t: None)
+        logger_cb(pesan)
+        sisa = len(grid) - len(out)
+        if sisa <= 0:
+            return out
+        return out + run_grid(grid[len(out):], entries, data, cfg,
+                              start_equity, risk_pct, workers=1,
+                              progress_cb=progress_cb, presorted=presorted)
     return out
 
 
@@ -428,6 +572,23 @@ def load_data(symbols: list[str], interval: str, days: int,
     return out
 
 
+def hitung_cut_ms(data: dict[str, list[Candle]], oos: float) -> Optional[int]:
+    """
+    Batas waktu split kronologis (epoch ms), atau None bila tidak membagi.
+
+    Dipisah dari split_chronological supaya proses pekerja bisa memakai
+    batas yang SAMA PERSIS tanpa perlu memegang seluruh dataset.
+    """
+    if oos <= 0 or oos >= 1 or not data:
+        return None
+    starts = [c[0].open_time for c in data.values() if c]
+    ends = [c[-1].open_time for c in data.values() if c]
+    if not starts:
+        return None
+    t0, t1 = min(starts), max(ends)
+    return t0 + int((t1 - t0) * (1.0 - oos))
+
+
 def split_chronological(data: dict[str, list[Candle]], oos: float
                         ) -> tuple[dict[str, list[Candle]], dict[str, list[Candle]]]:
     """
@@ -436,14 +597,9 @@ def split_chronological(data: dict[str, list[Candle]], oos: float
     oos adalah porsi akhir data untuk out of sample (mis. 0.3 = 30% terakhir).
     Batas waktu global menjaga urutan lintas simbol tetap konsisten.
     """
-    if oos <= 0 or oos >= 1 or not data:
+    cut = hitung_cut_ms(data, oos)
+    if cut is None:
         return data, {}
-    starts = [c[0].open_time for c in data.values() if c]
-    ends = [c[-1].open_time for c in data.values() if c]
-    if not starts:
-        return data, {}
-    t0, t1 = min(starts), max(ends)
-    cut = t0 + int((t1 - t0) * (1.0 - oos))
 
     is_data: dict[str, list[Candle]] = {}
     oos_data: dict[str, list[Candle]] = {}

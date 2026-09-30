@@ -52,10 +52,12 @@ from tools.backtest.optimize import (
     DEFAULT_SL,
     DEFAULT_TP_RR,
     DEFAULT_TRAIL,
+    DataSpec,
     SignalParams,
     _expand_range_token,
     build_grid,
     build_signal_grid,
+    hitung_cut_ms,
     load_data,
     run_grid,
     score_results,
@@ -648,7 +650,27 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
                      "(price action + volume saja), skalanya berbeda dari "
                      "skor live yang memakai lima detector.")
 
+    cut_ms = hitung_cut_ms(data, req.oos)
     is_data, oos_data = split_chronological(data, req.oos)
+    # Resep pemuatan untuk pekerja grid: mereka memuat candle IS sendiri
+    # dari cache CSV, jadi dataset tidak perlu dikirim lewat pickle.
+    # Tanpa ini, tiap pekerja pada metode start `spawn` (Windows) harus
+    # meng-unpickle salinan penuh dan bisa mati dengan MemoryError.
+    is_spec = DataSpec(symbols=tuple(sorted(is_data.keys())),
+                       interval=req.interval, days=req.days,
+                       data_dir=req.data_dir, cut_ms=cut_ms,
+                       bagian="is" if cut_ms is not None else "all")
+    # Dict candle asli tidak dipakai lagi setelah displit. Melepasnya lebih
+    # awal mengurangi jejak RAM proses induk sebelum pool dinyalakan.
+    # PENTING: saat oos <= 0, split_chronological mengembalikan OBJEK YANG
+    # SAMA sebagai is_data. Mengosongkannya di situ akan menghapus seluruh
+    # data kerja, jadi pengosongan hanya dilakukan bila memang ada salinan
+    # terpisah.
+    simbol_dipakai = sorted(data.keys())
+    n_simbol = len(data)
+    if data is not is_data and data is not oos_data:
+        data.clear()
+    data = {}
     emit("log", text=f"Split kronologis: in sample {len(is_data)} simbol, "
                      f"out of sample {len(oos_data)} simbol")
 
@@ -707,7 +729,8 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
             continue
         hasil = run_grid(exit_grid, e_is, is_data, vc_cache[sp], req.equity,
                          req.risk_pct, grid_workers, progress_cb=_grid_cb,
-                         presorted=True)
+                         presorted=True, data_spec=is_spec,
+                         log_cb=lambda t: emit("log", text=t))
         for r in hasil:
             r["signal"] = sp
         rows.extend(hasil)
@@ -757,8 +780,8 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
          rows=payload_rows,
          csv=csv_out,
          meta={
-             "symbols": sorted(data.keys()),
-             "n_symbols": len(data),
+             "symbols": simbol_dipakai,
+             "n_symbols": n_simbol,
              "n_candles": total_candles,
              "interval": req.interval,
              "days": req.days,
