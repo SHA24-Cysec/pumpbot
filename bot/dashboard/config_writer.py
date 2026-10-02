@@ -42,15 +42,23 @@ import yaml
 
 ALLOWED_KEYS: dict[str, type] = {
     # --- parameter exit (hasil utama optimizer) ---
+    "atr.period": int,
+    "atr.method": str,
     "stops.mode": str,
     "stops.percent_pct": float,
+    "stops.atr_multiplier": float,
     "take_profit.mode": str,
     "take_profit.rr": float,
+    "take_profit.atr_multiplier": float,
     "breakeven.enabled": bool,
+    "breakeven.trigger_mode": str,
     "breakeven.trigger_rr": float,
+    "breakeven.trigger_atr_mult": float,
     "breakeven.buffer_pct": float,
     "trailing.enabled": bool,
+    "trailing.mode": str,
     "trailing.percent_pct": float,
+    "trailing.atr_multiplier": float,
     "trailing.update_step_pct": float,
     # --- lookback detector ---
     "signal.min_candles": int,
@@ -63,6 +71,10 @@ ALLOWED_KEYS: dict[str, type] = {
     "signal.score_threshold": float,
     "signal.weights.price_action": float,
     "signal.weights.volume": float,
+    # --- gate band perubahan 24 jam, nilai absolut (gerbang entry) ---
+    "signal.change_24h.enabled": bool,
+    "signal.change_24h.min_pct": float,
+    "signal.change_24h.max_pct": float,
     # --- cooldown ---
     "signal.cooldown_after_exit_min": float,
 }
@@ -72,8 +84,11 @@ ALLOWED_KEYS: dict[str, type] = {
 # seperti "percent" akan lolos di sini tapi ditolak load_config sehingga
 # seluruh penulisan dibatalkan.
 ALLOWED_ENUMS: dict[str, tuple[str, ...]] = {
-    "stops.mode": ("percent", "structure"),
-    "take_profit.mode": ("rr", "multi", "single"),
+    "stops.mode": ("percent", "structure", "atr"),
+    "take_profit.mode": ("rr", "multi", "single", "atr"),
+    "breakeven.trigger_mode": ("auto", "rr", "atr"),
+    "trailing.mode": ("percent", "atr"),
+    "atr.method": ("wilder", "sma"),
 }
 
 BACKUP_DIRNAME = "backup"

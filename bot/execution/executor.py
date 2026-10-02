@@ -29,6 +29,7 @@ from bot.database.db import Database
 from bot.exchange.gateway import ExchangeGateway
 from bot.models import ExitChunk, Fill, Position, Signal, SymbolFilters
 from bot.portfolio import Portfolio
+from bot.risk_management.atr import atr_percent_of_price
 from bot.risk_management.manager import RiskManager
 from bot.risk_management.stops import (
     initial_stop,
@@ -212,6 +213,20 @@ class Executor:
             return None
 
         st = self.cfg.stops
+        # ATR dibekukan di sini (candle tertutup terakhir) dan dipakai untuk
+        # SELURUH umur posisi: SL, TP, pemicu BE, dan trailing. Nilainya
+        # berasal dari Signal supaya angka yang dihitung/di-log saat sinyal
+        # dan yang tersimpan di posisi selalu sama.
+        atr_val = float(getattr(signal, "atr", 0.0) or 0.0)
+        if st.mode == "atr" and atr_val <= 0:
+            self.db.record_event(
+                "WARNING", "ATR_FALLBACK",
+                f"{symbol}: ATR tidak tersedia saat entry -> SL/TP memakai "
+                f"stops.percent_pct {st.percent_pct}% dan take_profit rr "
+                f"{self.cfg.take_profit.rr}", symbol)
+            logger.warning(
+                f"ATR {symbol} tidak tersedia (candle < {self.cfg.atr.period + 1} "
+                f"atau data rusak) -> SL/TP memakai fallback percent/rr")
         stop = initial_stop(
             entry=entry_ref,
             swing_low=signal.suggested_stop if signal.suggested_stop > 0 else None,
@@ -219,6 +234,10 @@ class Executor:
             percent_pct=st.percent_pct,
             min_stop_pct=st.min_stop_pct,
             max_stop_pct=st.max_stop_pct,
+            atr=atr_val,
+            atr_multiplier=st.atr_multiplier,
+            atr_min_multiplier=st.atr_min_multiplier,
+            atr_max_multiplier=st.atr_max_multiplier,
         )
         stop = filters.round_price(stop, "down")   # jangan lebih dekat karena pembulatan
         if stop <= 0 or stop >= entry_ref:
@@ -282,23 +301,59 @@ class Executor:
         # terjual -> equity terlihat "bocor" sebesar fee beli.
         fee_qty = (fill.fee_quote / fill.price) if fill.price > 0 else 0.0
         actual_qty = fill.qty - fee_qty
-        # SL/TP dihitung ulang dari HARGA FILL sebenarnya
+        # SL/TP dihitung ulang dari HARGA FILL sebenarnya (ATR tetap nilai
+        # beku yang sama; yang bergeser hanya entry).
         stop = initial_stop(
             entry=entry_price,
             swing_low=(signal.suggested_stop if signal.suggested_stop > 0 and
                        signal.suggested_stop < entry_price else None),
             mode=st.mode, percent_pct=st.percent_pct,
             min_stop_pct=st.min_stop_pct, max_stop_pct=st.max_stop_pct,
+            atr=atr_val, atr_multiplier=st.atr_multiplier,
+            atr_min_multiplier=st.atr_min_multiplier,
+            atr_max_multiplier=st.atr_max_multiplier,
         )
+        # Peringatan biaya: SL yang lebih sempit daripada fee round-trip
+        # membuat trade rugi bersih sebelum sempat bergerak. Tidak diblokir
+        # (keputusan tetap milik operator), tapi harus TERLIHAT di log dan
+        # tabel events supaya tidak jadi kejutan di laporan.
+        if atr_val > 0 and entry_price > 0:
+            dist_pct = (entry_price - stop) / entry_price * 100.0
+            fee_rt = self.cfg.risk.fee_pct * 2.0
+            if dist_pct < fee_rt:
+                pesan = (f"{symbol}: jarak SL {dist_pct:.3f}% lebih sempit "
+                         f"daripada fee round-trip {fee_rt:.2f}% "
+                         f"(SL {stop:.6g} vs entry {entry_price:.6g}). "
+                         f"Naikkan stops.atr_multiplier atau atr_min_multiplier "
+                         f"bila tidak diinginkan.")
+                logger.warning(pesan)
+                self.db.record_event("WARNING", "ATR_FEE_THIN", pesan, symbol)
         tp_cfg = self.cfg.take_profit
-        tps = take_profit_levels(entry_price, stop, tp_cfg.mode, tp_cfg.rr, tp_cfg.targets)
+        tps = take_profit_levels(entry_price, stop, tp_cfg.mode, tp_cfg.rr,
+                                 tp_cfg.targets, atr=atr_val,
+                                 atr_multiplier=tp_cfg.atr_multiplier)
+        if not tps:
+            # take_profit.mode "atr" tanpa ATR yang bisa dipakai -> jangan
+            # pasang TP tanpa dasar; pakai rr supaya posisi tetap punya target.
+            logger.warning(
+                f"TP basis ATR tidak bisa dihitung untuk {symbol} "
+                f"(ATR={atr_val}) -> fallback take_profit rr {tp_cfg.rr}")
+            self.db.record_event(
+                "WARNING", "ATR_FALLBACK",
+                f"{symbol}: take_profit mode atr tanpa ATR -> fallback rr "
+                f"{tp_cfg.rr}", symbol)
+            tps = take_profit_levels(entry_price, stop, "rr", tp_cfg.rr,
+                                     tp_cfg.targets)
 
         # ---- 5. catat posisi ke DB ----
+        # atr_entry ikut disimpan: tanpa ini, posisi yang dipulihkan setelah
+        # restart kehilangan basis ATR-nya dan trailing/BE jatuh ke persen.
         trade_id = self.db.open_trade(
             symbol=symbol, entry_time=now_ms(), entry_price=entry_price,
             qty=actual_qty, quote_value=fill.quote_qty, stop_loss=stop,
             take_profits=[t["price"] for t in tps], score=signal.score,
             entry_reason=signal.reason, exit_mode=self.cfg.execution.exit_mode,
+            atr_entry=atr_val,
         )
 
         # bangun chunk partial TP: qty per chunk dibulatkan step,
@@ -327,6 +382,7 @@ class Executor:
             take_profits=[c.tp_price for c in chunks], chunks=chunks,
             highest_price=entry_price, score=signal.score,
             entry_reason=signal.reason, exit_mode=self.cfg.execution.exit_mode,
+            atr_entry=atr_val,
         )
         pos.realized_pnl = -fill.fee_quote   # PnL ekonomis: mulai minus fee beli
         pos.fees_paid = fill.fee_quote
@@ -335,13 +391,16 @@ class Executor:
                              realized_pnl=round(pos.realized_pnl, 6),
                              fees_paid=round(pos.fees_paid, 6))
 
+        atr_txt = (f"ATR {atr_val:.6g} ({atr_percent_of_price(atr_val, entry_price):.2f}% harga)"
+                   if atr_val > 0 else "ATR tidak tersedia")
         self.db.record_event(
             "INFO", "ENTRY",
             f"{symbol}: beli {actual_qty:.6f} @ {entry_price:.6f} "
-            f"(notional {fill.quote_qty:.2f}, SL {stop:.6f}, "
-            f"TP {[round(c.tp_price, 6) for c in chunks]})", symbol)
+            f"(notional {fill.quote_qty:.2f}, SL {stop:.6f} [{st.mode}], "
+            f"{atr_txt}, TP {[round(c.tp_price, 6) for c in chunks]})", symbol)
         logger.info(f"ENTRY #{trade_id} {symbol}: {actual_qty:.6f} @ {entry_price:.6f} "
-                    f"SL={stop:.6f} TP={[round(c.tp_price, 6) for c in chunks]}")
+                    f"SL={stop:.6f} ({st.mode} x{st.atr_multiplier if st.mode == 'atr' else ''}) "
+                    f"{atr_txt} TP={[round(c.tp_price, 6) for c in chunks]}")
 
         # ---- 6. pasang exit order (OCO) ----
         if pos.exit_mode == "oco":

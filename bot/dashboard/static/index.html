@@ -385,10 +385,10 @@
       <table>
         <thead><tr>
           <th>Pair</th><th>Entry</th><th>Harga</th><th>Qty</th><th>Nilai</th>
-          <th>SL</th><th>TP</th><th>BE</th><th>Trail</th><th>PnL%</th><th>PnL</th>
+          <th>SL</th><th>TP</th><th>ATR</th><th>BE</th><th>Trail</th><th>PnL%</th><th>PnL</th>
           <th>Mode</th><th></th>
         </tr></thead>
-        <tbody id="positions"><tr><td colspan="13" class="mut">belum ada posisi</td></tr></tbody>
+        <tbody id="positions"><tr><td colspan="14" class="mut">belum ada posisi</td></tr></tbody>
       </table>
       </div>
     </div>
@@ -486,6 +486,14 @@
         <div class="bt-f"><label>Filter Anchored VWAP</label>
           <select id="bt_vwap"><option value="config">ikut config</option>
             <option value="on">paksa aktif</option><option value="off">paksa mati</option></select></div>
+        <div class="bt-f col"><label>Gate band perubahan 24 jam (nilai absolut)</label>
+          <select id="bt_change24h" class="wide">
+            <option value="config">ikut config (band dari config.yaml)</option>
+            <option value="on">paksa aktif</option>
+            <option value="off">paksa mati (uji tanpa gate)</option>
+          </select>
+          <div class="hint" id="btChange24Hint">Hanya koin dengan kenaikan 24 jam di dalam band
+            yang boleh entry. Band aktif ditampilkan di bawah ini.</div></div>
       </div>
 
       <div class="bt-group">
@@ -494,15 +502,38 @@
           rentang otomatis <b>awal..akhir:langkah</b> (contoh
           <b>0.5..2.0:0.25</b> menjadi 0.5, 0.75, 1.0, sampai 2.0).
           Rentang menurun seperti <b>2.0..0.5:0.5</b> juga sah.</div>
-        <div class="bt-f col"><label>Stop loss persen</label>
+        <div class="bt-f col"><label>Basis parameter exit</label>
+          <select id="bt_basis" class="wide">
+            <option value="both">keduanya (bandingkan ATR vs persen/R)</option>
+            <option value="atr">ATR saja (kelipatan ATR)</option>
+            <option value="percent">persen saja (persen & kelipatan risiko)</option>
+          </select></div>
+        <div class="bt-f"><label>ATR period</label>
+          <input type="number" id="bt_atr_period" value="14" min="2" step="1"></div>
+        <div class="bt-f"><label>ATR method</label>
+          <select id="bt_atr_method"><option value="wilder">wilder (RMA)</option>
+            <option value="sma">sma</option></select></div>
+        <div class="hint" style="margin-bottom:8px">Kolom <b>SL, TP, BE, dan Trailing</b>
+          di bawah dibaca sesuai basis: pada basis <b>persen</b> satuannya persen harga
+          dan kelipatan risiko (R), pada basis <b>ATR</b> satuannya kelipatan ATR.
+          Daftar ATR punya kolomnya sendiri supaya keduanya bisa diuji sekaligus.</div>
+        <div class="bt-f col"><label>ATR: SL, TP, BE (0 = mati)</label>
+          <div style="display:flex;gap:6px">
+            <input id="bt_atr_sl" value="1.0,1.5,2.0,2.5,3.0" style="width:100%;max-width:none">
+            <input id="bt_atr_tp" value="2.0,3.0,4.0,5.0,6.0" style="width:100%;max-width:none">
+            <input id="bt_atr_be" value="0,1.0,1.5,2.0" style="width:100%;max-width:none">
+          </div></div>
+        <div class="bt-f col"><label>ATR: trailing (0 = mati)</label>
+          <input class="wide" id="bt_atr_trail" value="0,1.5,2.0,2.5,3.0"></div>
+        <div class="bt-f col"><label>Basis persen: stop loss persen</label>
           <input class="wide" id="bt_sl" value="0.5,0.75,1.0,1.5,2.0,3.0"></div>
-        <div class="bt-f col"><label>Take profit (kelipatan risiko)</label>
+        <div class="bt-f col"><label>Basis persen: take profit (kelipatan risiko)</label>
           <input class="wide" id="bt_tp" value="1.0,1.5,2.0,3.0,4.0"></div>
-        <div class="bt-f col"><label>Breakeven (kelipatan risiko, 0 = mati)</label>
+        <div class="bt-f col"><label>Basis persen: breakeven (kelipatan risiko, 0 = mati)</label>
           <input class="wide" id="bt_be" value="0,0.5,0.75,1.0"></div>
-        <div class="bt-f col"><label>Buffer breakeven persen</label>
+        <div class="bt-f col"><label>Buffer breakeven persen (berlaku kedua basis)</label>
           <input class="wide" id="bt_be_buffer" value="0.2,0.3,0.5"></div>
-        <div class="bt-f col"><label>Trailing persen (0 = mati)</label>
+        <div class="bt-f col"><label>Basis persen: trailing persen (0 = mati)</label>
           <input class="wide" id="bt_trail" value="0,0.3,0.5,0.75,1.0"></div>
         <div class="bt-f col"><label>Cooldown menit (kosong = ikut config)</label>
           <input class="wide" id="bt_cooldown" placeholder="15,30"></div>
@@ -568,8 +599,8 @@
       <div class="scroll" style="max-height:min(420px,50vh)">
         <table class="bt-res">
           <thead><tr>
-            <th>#</th><th data-k="thr">THR<span class="si"></span></th><th data-k="wpa">WPA<span class="si"></span></th><th data-k="sl">SL%<span class="si"></span></th><th data-k="tp">TP<span class="si"></span></th><th data-k="be">BE<span class="si"></span></th>
-            <th data-k="buf">BUF<span class="si"></span></th><th data-k="tr">TR%<span class="si"></span></th><th data-k="cd">CD<span class="si"></span></th>
+            <th>#</th><th data-k="thr">THR<span class="si"></span></th><th data-k="wpa">WPA<span class="si"></span></th><th>BASIS</th><th data-k="sl">SL<span class="si"></span></th><th data-k="tp">TP<span class="si"></span></th><th data-k="be">BE<span class="si"></span></th>
+            <th data-k="buf">BUF<span class="si"></span></th><th data-k="tr">TR<span class="si"></span></th><th data-k="cd">CD<span class="si"></span></th>
             <th data-k="n">N<span class="si"></span></th><th data-k="win">WIN%<span class="si"></span></th><th data-k="ret">RET%<span class="si"></span></th><th data-k="pf">PF<span class="si"></span></th><th data-k="mdd">MDD%<span class="si"></span></th><th data-k="skor">SKOR<span class="si"></span></th>
             <th class="oos" data-k="oos_n">N<span class="si"></span></th><th class="oos" data-k="oos_ret">RET%<span class="si"></span></th>
             <th class="oos" data-k="oos_pf">PF<span class="si"></span></th><th class="oos" data-k="oos_mdd">MDD%<span class="si"></span></th>
@@ -577,8 +608,10 @@
           <tbody id="btRows"></tbody>
         </table>
       </div>
-      <div class="hint">Kolom setelah garis pemisah adalah hasil
-        <b>out of sample</b>, yaitu bagian akhir data yang tidak ikut dioptimasi.
+      <div class="hint">Kolom <b>BASIS</b> menunjukkan satuan kolom SL/TP/BE/TR:
+        <b>persen</b> berarti persen harga dan kelipatan risiko (R), <b>atr</b>
+        berarti kelipatan ATR (ditandai akhiran <b>x</b>). Kolom setelah garis
+        pemisah adalah hasil <b>out of sample</b>, yaitu bagian akhir data yang tidak ikut dioptimasi.
         Kombinasi yang bagus di kiri tetapi negatif di kanan berarti
         <b>overfitting</b>. Klik satu baris untuk memilihnya.</div>
 
@@ -588,8 +621,10 @@
           Terapkan baris terpilih ke config.yaml</h3>
         <label class="bt-chk"><input type="checkbox" id="bt_g_exit" checked>
           <span><b>Parameter exit</b>
-            <span class="d">Stop loss, take profit, breakeven, trailing.
-              Inilah hasil utama optimizer dan yang paling aman diterapkan.</span></span></label>
+            <span class="d">Stop loss, take profit, breakeven, trailing, plus
+              <b>basisnya</b> (mode ATR atau persen/R) dan periode ATR. Basis ikut
+              ditulis supaya config tidak berakhir campur satuan. Inilah hasil
+              utama optimizer dan yang paling aman diterapkan.</span></span></label>
         <label class="bt-chk"><input type="checkbox" id="bt_g_lookback">
           <span><b>Lookback detector</b>
             <span class="d">MA volume, skala lonjakan, candle struktur, breakout,
@@ -811,7 +846,7 @@ function renderEvents(){
 function renderPositions(){
   const tb = $("positions");
   if(!S.positions.length){
-    tb.innerHTML = "<tr><td colspan='13' class='mut'>belum ada posisi</td></tr>";
+    tb.innerHTML = "<tr><td colspan='14' class='mut'>belum ada posisi</td></tr>";
     return;
   }
   tb.innerHTML = S.positions.map(p => {
@@ -826,6 +861,11 @@ function renderPositions(){
       "<td>"+money(p.value)+"</td>"+
       "<td>"+p.stop_loss.toPrecision(6)+"</td>"+
       "<td>"+tps+"</td>"+
+      // ATR beku posisi ini: basis ATR untuk SL/TP/BE/trailing-nya. "-" berarti
+      // posisi dihitung sebelum ATR tersedia/aktif (memakai basis persen/R).
+      "<td class='mut' style='font-size:11px'"+
+        (p.atr_entry ? " title='ATR saat entry (dibekukan)'" : "")+">"+
+        (p.atr_entry ? Number(p.atr_entry).toPrecision(6) : "-")+"</td>"+
       "<td>"+(p.be_triggered?"✅":"-")+"</td>"+
       "<td>"+(p.trail_active?"✅":"-")+"</td>"+
       "<td class='"+cls(p.unrealized_pnl_pct)+"'>"+pct(p.unrealized_pnl_pct)+"</td>"+
@@ -874,8 +914,19 @@ function renderSignals(){
     // Filter Anchored VWAP: hanya tampil kalau datanya ada (sinyal lama tidak punya).
     const vw = s.vwap || null;
     const vwapFlag = (vw && vw.passed === false) ? "<span class='flag gate'>VWAP</span>" : "";
+    // Gate band perubahan 24 jam (nilai absolut): tampil saat koin ditolak.
+    const b24 = s.change_24h || null;
+    const bandFlag = (b24 && b24.passed === false)
+      ? "<span class='flag gate'>BAND</span>" : "";
     const bd = s.breakdown || {};
     let title = Object.entries(bd).map(([k,v])=>k+": "+v).join("  |  ");
+    if(b24){
+      const c = (b24.change_pct === null || b24.change_pct === undefined)
+        ? "-" : (Number(b24.change_pct)).toFixed(2) + "%";
+      title += "  |  kenaikan 24 jam: " + c + " (band " +
+               (Number(b24.min_pct)||0) + ".." + (Number(b24.max_pct)||0) + "%)" +
+               (b24.passed ? " LOLOS" : " TOLAK: " + (b24.reason || ""));
+    }
     if(vw){
       title += "  |  vwap: " + (Number(vw.vwap)||0).toPrecision(6) +
                " (jarak " + (Number(vw.dist_pct)||0).toFixed(2) + "%" +
@@ -887,7 +938,7 @@ function renderSignals(){
       "<div class='scorebar'><div style='width:"+Math.min(100,s.score)+"%;"+
         "background:"+scoreColor(s.score)+"'></div></div>"+
       "<span class='sc' style='color:"+scoreColor(s.score)+"'>"+Math.round(s.score)+"</span>"+
-      flag+vwapFlag+"</div>";
+      flag+vwapFlag+bandFlag+"</div>";
   }).join("");
   // rincian detector simbol teratas
   const top = S.signals[0];
@@ -960,6 +1011,7 @@ const PARAM_FIELDS = [
   ["trailing_enabled","Trailing stop aktif","checkbox",""],
   ["breakeven_enabled","Breakeven aktif","checkbox",""],
   ["vwap_filter_enabled","Filter Anchored VWAP aktif","checkbox",""],
+  ["change24h_enabled","Gate band perubahan 24 jam aktif (absolut 6%..10%)","checkbox",""],
 ];
 
 function renderParams(){
@@ -1071,7 +1123,8 @@ const BT = {
 };
 
 const BT_FIELDS = ["symbols","top","days","interval","download","oos","workers",
-  "min_trades","equity","top_rows","vwap","sl","tp","be","be_buffer","trail",
+  "min_trades","equity","top_rows","vwap","change24h","sl","tp","be","be_buffer","trail",
+  "basis","atr_period","atr_method","atr_sl","atr_tp","atr_be","atr_trail",
   "cooldown","thr","wpa","ma_period","spike_scale","structure","breakout",
   "swing","min_candles","w_pnl","w_pf","w_dd"];
 
@@ -1144,7 +1197,8 @@ function btEstimate(){
 
   // Rentang salah format di kolom grid mana pun harus terlihat jelas.
   const KOLOM_GRID = ["sl","tp","be","be_buffer","trail","cooldown","thr","wpa",
-    "ma_period","spike_scale","structure","breakout","swing","min_candles"];
+    "ma_period","spike_scale","structure","breakout","swing","min_candles",
+    "atr_sl","atr_tp","atr_be","atr_trail"];
   let sakit = null;
   for(const k of KOLOM_GRID){
     const s = btRentangSakit(btVal(k));
@@ -1166,16 +1220,46 @@ function btEstimate(){
   const cd  = btNums(btVal("cooldown"));
   const cds = cd.length ? cd : [null];
 
-  const seen = new Set();
-  for(const c of cds) for(const a of sl) for(const b of tp)
-    for(const e of be) for(const f of buf) for(const g of tr){
-      let key;
-      if(e <= 0 || e >= b)      key = [a,b,0,0,0,c].join("|");
-      else if(g <= 0)           key = [a,b,e,f,0,c].join("|");
-      else                      key = [a,b,e,f,g,c].join("|");
-      seen.add(key);
+  /* Ukuran grid exit per basis, memakai aturan kanonikalisasi yang sama
+     dengan canonical() di tools/backtest/optimize.py:
+       - BE mati bila nilai BE <= 0 atau >= nilai TP (pemicunya tidak pernah
+         tercapai sebelum TP), dan trailing ikut mati karena di bot trailing
+         hanya aktif setelah BE.
+       - trailing mati bila nilainya <= 0.
+     Pada basis ATR, daftar angkanya kelipatan ATR dan TIDAK disaring oleh
+     min_stop_pct/max_stop_pct: batas persen itu hanya berlaku untuk basis
+     persen (penjepitan ATR memakai atr_min/atr_max_multiplier, bukan batas
+     yang membuang kombinasi). */
+  const basisDipilih = String(btVal("basis") || "both");
+  const basisList = basisDipilih === "both" ? ["percent","atr"] : [basisDipilih];
+
+  function btHitungExit(basis){
+    let listSl, listTp, listBe, listTr;
+    if(basis === "atr"){
+      listSl = btNums(btVal("atr_sl")).filter(v => v > 0);
+      listTp = btNums(btVal("atr_tp")).filter(v => v > 0);
+      listBe = btNums(btVal("atr_be"));
+      listTr = btNums(btVal("atr_trail"));
+    } else {
+      listSl = sl; listTp = tp; listBe = be; listTr = tr;
     }
-  const nExit = seen.size;
+    const seen = new Set();
+    for(const c of cds) for(const a of listSl) for(const b of listTp)
+      for(const e of listBe) for(const f of buf) for(const g of listTr){
+        let key;
+        if(e <= 0 || e >= b)      key = [basis,a,b,0,0,0,c].join("|");
+        else if(g <= 0)           key = [basis,a,b,e,f,0,c].join("|");
+        else                      key = [basis,a,b,e,f,g,c].join("|");
+        seen.add(key);
+      }
+    return seen.size;
+  }
+  let nExit = 0;
+  const nExitPerBasis = {};
+  for(const b of basisList){
+    nExitPerBasis[b] = btHitungExit(b);
+    nExit += nExitPerBasis[b];
+  }
 
   const satu = (txt, fallback) => {
     const v = btNums(txt);
@@ -1202,9 +1286,13 @@ function btEstimate(){
   const slBuang = slSemua.length - sl.length;
 
   const el = $("btEst");
+  const rincianBasis = basisList
+    .map(b => (b === "atr" ? "ATR " : "persen ") +
+              nExitPerBasis[b].toLocaleString("id-ID"))
+    .join(" + ");
   let pesan = "<b>" + nSignal + "</b> kombinasi sinyal × <b>" +
-    nExit.toLocaleString("id-ID") + "</b> kombinasi exit = <b>" +
-    total.toLocaleString("id-ID") + "</b> baris, " + nSym + " simbol";
+    nExit.toLocaleString("id-ID") + "</b> kombinasi exit (" + rincianBasis +
+    ") = <b>" + total.toLocaleString("id-ID") + "</b> baris, " + nSym + " simbol";
   let lebih = false;
   if(nSignal === 0 || nExit === 0){
     pesan = "Grid kosong. Periksa isian, rasio bobot harus di antara 0 dan 1.";
@@ -1222,6 +1310,27 @@ function btEstimate(){
   el.innerHTML = pesan;
   el.className = "bt-est" + (lebih ? " over" : "");
   return !lebih;
+}
+
+/* --------- ringkasan gate band perubahan 24 jam ---------
+   Angka diambil dari /api/backtest/defaults (nilai config yang sedang
+   dipakai), supaya operator tahu band mana yang berlaku saat memilih
+   "ikut config" di formulir. */
+function btTampilBand(){
+  const el = $("btChange24Hint");
+  const d = BT.defaults;
+  if(!el || !d) return;
+  const min = Number(d.change24h_min_pct);
+  const max = Number(d.change24h_max_pct);
+  const aktif = !!d.change24h_enabled;
+  const status = aktif ? "AKTIF" : "MATI di config";
+  const band = (isFinite(min) && isFinite(max))
+    ? min.toLocaleString("id-ID") + "% sampai " + max.toLocaleString("id-ID") + "%"
+    : "belum tersedia";
+  el.innerHTML = "Besar perubahan 24 jam dari ticker Binance (nilai absolut). " +
+    "Band config: <b>" + band + "</b> (" + status + "). Koin yang pergerakannya " +
+    "di luar band ditolak sebelum entry: terlalu tenang, sudah naik terlalu " +
+    "tinggi, atau jatuh terlalu dalam.";
 }
 
 /* --------- sinkron dengan status pause --------- */
@@ -1331,6 +1440,19 @@ function btNum(v, d=2){
   return (v === null || v === undefined || isNaN(v)) ? "-" : Number(v).toFixed(d);
 }
 
+/* Nilai parameter exit dibaca sesuai basis barisnya. Pada basis ATR angkanya
+   kelipatan ATR dan diberi akhiran "x" supaya tidak tertukar dengan persen
+   pada basis persen (kolom fisiknya sama, artinya berbeda). */
+function btExitVal(e, kolom, d=2){
+  if(!e) return "-";
+  if(e.basis === "atr"){
+    const v = {sl:e.sl_atr, tp:e.tp_atr, be:e.be_atr, tr:e.trail_atr}[kolom];
+    return btNum(v, d) + "x";
+  }
+  const v = {sl:e.sl_pct, tp:e.tp_rr, be:e.be_rr, tr:e.trail_pct}[kolom];
+  return btNum(v, d);
+}
+
 /* --------- pengurutan tabel hasil ---------
    Klik judul kolom angka: klik pertama urut kecil->besar, klik kedua
    besar->kecil, klik ketiga kembali ke peringkat skor (urutan server).
@@ -1340,11 +1462,11 @@ function btNum(v, d=2){
 const BT_SORT_VAL = {
   thr:     r => r.signal.threshold,
   wpa:     r => r.signal.w_pa,
-  sl:      r => r.exit.sl_pct,
-  tp:      r => r.exit.tp_rr,
-  be:      r => r.exit.be_rr,
+  sl:      r => r.exit.basis === "atr" ? r.exit.sl_atr : r.exit.sl_pct,
+  tp:      r => r.exit.basis === "atr" ? r.exit.tp_atr : r.exit.tp_rr,
+  be:      r => r.exit.basis === "atr" ? r.exit.be_atr : r.exit.be_rr,
   buf:     r => r.exit.be_buffer_pct,
-  tr:      r => r.exit.trail_pct,
+  tr:      r => r.exit.basis === "atr" ? r.exit.trail_atr : r.exit.trail_pct,
   cd:      r => r.exit.cooldown_min,
   n:       r => r.is.trades,
   win:     r => r.is.win_rate,
@@ -1419,11 +1541,13 @@ function btRenderRows(state){
       "<td>" + (urut + 1) + "</td>" +
       "<td>" + btNum(s.threshold,0) + "</td>" +
       "<td>" + btNum(s.w_pa,2) + "</td>" +
-      "<td>" + btNum(e.sl_pct) + "</td>" +
-      "<td>" + btNum(e.tp_rr) + "</td>" +
-      "<td>" + btNum(e.be_rr) + "</td>" +
+      "<td class='mut' style='font-size:11px'>" +
+        (e.basis === "atr" ? "atr" : "persen") + "</td>" +
+      "<td>" + btExitVal(e,"sl") + "</td>" +
+      "<td>" + btExitVal(e,"tp") + "</td>" +
+      "<td>" + btExitVal(e,"be") + "</td>" +
       "<td>" + btNum(e.be_buffer_pct) + "</td>" +
-      "<td>" + btNum(e.trail_pct) + "</td>" +
+      "<td>" + btExitVal(e,"tr") + "</td>" +
       "<td>" + (e.cooldown_min === null ? "-" : btNum(e.cooldown_min,0)) + "</td>" +
       "<td>" + i.trades + "</td>" +
       "<td>" + btNum(i.win_rate) + "</td>" +
@@ -1491,7 +1615,7 @@ $("btRun").onclick = async () => {
     body[k] = v;
   }
   body.download = btVal("download");
-  ["top","days","workers","min_trades","top_rows"].forEach(k => {
+  ["top","days","workers","min_trades","top_rows","atr_period"].forEach(k => {
     if(body[k] !== undefined) body[k] = parseInt(body[k], 10);
   });
   ["oos","equity","w_pnl","w_pf","w_dd"].forEach(k => {
@@ -1596,6 +1720,7 @@ async function btInit(){
     if(el) BT.awal[k] = el.type === "checkbox" ? el.checked : el.value;
   }
   BT.defaults = await api("/api/backtest/defaults");
+  btTampilBand();
   btEstimate();
   btSyncPause();
   const st = await api("/api/backtest/state?since=0");

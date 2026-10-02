@@ -19,6 +19,7 @@ from bot.config import Config
 from bot.data_collector.buffers import SymbolBuffer
 from bot.exchange.gateway import ExchangeGateway
 from bot.models import Ticker24h
+from bot.risk_management import atr as atr_mod
 
 logger = logging.getLogger("pumpbot.collector")
 
@@ -258,3 +259,23 @@ class DataCollector:
 
     def buffer(self, symbol: str) -> Optional[SymbolBuffer]:
         return self.buffers.get(symbol)
+
+    def atr(self, symbol: str, period: Optional[int] = None,
+            method: Optional[str] = None) -> float:
+        """
+        ATR terkini dari candle TERTUTUP di buffer (0.0 = belum bisa dihitung).
+
+        Buffer hanya menyimpan candle yang sudah close (lihat SymbolBuffer.
+        on_candle), jadi nilai ini tidak berubah-ubah karena candle berjalan.
+        Period dan metode default mengikuti config.atr; Executor memakai
+        fungsi ini saat entry untuk membekukan ATR posisi baru.
+        """
+        buf = self.buffers.get(symbol)
+        if buf is None or not buf.candles:
+            return 0.0
+        cfg_atr = getattr(self.cfg, "atr", None)
+        p = int(period if period is not None
+                else (cfg_atr.period if cfg_atr else 14))
+        m = (method if method is not None
+             else (cfg_atr.method if cfg_atr else atr_mod.WILDER))
+        return atr_mod.compute_atr(list(buf.candles), p, m)

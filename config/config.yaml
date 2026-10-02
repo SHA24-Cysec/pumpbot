@@ -132,9 +132,20 @@ signal:
     weight: 0.60
     # Jika skor manipulasi >= nilai ini, koin langsung di-VETO (tidak akan entry).
     veto_threshold: 0.70
-    # Perubahan harga 24 jam maksimum. Koin yang sudah naik >20% dalam sehari
-    # berisiko tinggi dump - bot tidak boleh mengejar puncak.
-    max_change_24h_pct: 20
+    # Ambang kenaikan 24 jam (persen). Dibaca dari ticker 24 jam Binance
+    # (priceChangePercent), sama seperti yang tampil di aplikasi.
+    #
+    # Cara kerjanya bertingkat, bukan gerbang mati:
+    #   - di bawah ambang, penalti naik proporsional (kenaikan 6% dari
+    #     ambang 10% menyumbang 42 dari 100 poin komponen c1),
+    #   - menyentuh atau melewati ambang, komponen c1 langsung PENUH (100),
+    #     sehingga skor sinyal terpotong 24% dan koin hanya bisa lolos bila
+    #     skor dasarnya sangat kuat.
+    # Nilai 10% dipilih karena koin yang sudah naik segitu dalam sehari
+    # berisiko dump, sementara koin naik 6-10% masih punya ruang dan tetap
+    # bisa lolos bila sinyal lainnya kuat. Angka terukur ada di README
+    # bagian 6 (tools/backtest/README.md).
+    max_change_24h_pct: 10
     # Pola pump-and-dump: naik >= 8% dalam window, lalu turun >= 40% dari kenaikan.
     pump_dump_gain_pct: 8
     pump_dump_pullback_pct: 40
@@ -202,6 +213,35 @@ signal:
     fib_zone: [0.382, 0.618]
     # Posisi harga di range 30 candle; >= 0.9 berarti menempel puncak.
     near_top_pct: 0.9
+
+  # ------------------- GATE BAND PERUBAHAN 24 JAM (GATE ENTRY) -------------------
+  # Hanya koin dengan BESAR perubahan 24 jam di dalam band ini yang boleh entry.
+  # Ini gerbang keras, bukan penalti skor: koin di luar band tidak pernah
+  # dibeli, berapa pun skor sinyalnya.
+  #
+  # Sumber angka: priceChangePercent dari ticker 24 jam Binance (harga
+  # sekarang dibanding 24 jam bergulir ke belakang). Nilainya dipakai sebagai
+  # NILAI ABSOLUT, sama seperti ManipulationDetector di repo ini, karena pump
+  # dan dump diukur dengan ukuran yang sama. Jadi yang dinilai BESAR
+  # pergerakannya, bukan arahnya:
+  #   naik 6 sampai 10%  -> lolos
+  #   turun 6 sampai 10% -> lolos juga (pergerakannya sama besar)
+  #   tenang di bawah 6% -> ditolak
+  #   di atas 10%        -> ditolak, naik berisiko beli di puncak dan turun
+  #                         sedalam itu berarti pisau jatuh
+  # Batas kedua ujung INKLUSIF (6% dan 10% sama-sama lolos).
+  #
+  # Pengaman tambahan untuk koin turun: penalti manipulasi 24 jam memakai
+  # angka absolut yang sama, jadi koin turun 6 sampai 10% tetap dipotong
+  # skornya dan butuh sinyal jauh lebih kuat untuk benar-benar tereksekusi.
+  #
+  # Kalau data ticker 24 jam belum tersedia, koin DITOLAK (fail-closed):
+  # gate ini justru ada untuk mencegah entry tanpa tahu pergerakannya.
+  # Dimatikan sementara tanpa restart lewat panel Parameter di dashboard.
+  change_24h:
+    enabled: true
+    min_pct: 6.0
+    max_pct: 10.0
 
   # ------------------- FILTER ANCHORED VWAP (GATE ENTRY) -------------------
   # VWAP berlabuh dari awal pump. BUKAN sumber skor: hanya boleh MEMBATALKAN
@@ -272,33 +312,116 @@ risk:
   # Estimasi fee taker Binance (%) untuk BE dan pencatatan PnL.
   fee_pct: 0.1
 
+# ----------------------------------------------------------------------------
+# ATR (Average True Range) - dasar jarak SL, TP, BE, dan trailing
+# ----------------------------------------------------------------------------
+# ATR = rata-rata True Range, yaitu ukuran volatilitas dalam SATUAN HARGA.
+# Rumusnya Wilder (1978) dan dihitung dari candle TERTUTUP pada interval
+# data.kline_interval di atas. Perlakukan blok ini sebagai "ukuran gelembung"
+# pasar: makin gelembung, makin lebar jarak stop yang dipakai.
+#
+# Satu nilai ATR diambil saat entry lalu DIBEKUKAN untuk seluruh umur posisi
+# (tersimpan di kolom trades.atr_entry), jadi SL/TP/BE/trailing sebuah posisi
+# tidak bergerak hanya karena volatilitas berubah. Ini keputusan desain:
+# risiko yang sudah diukur saat sizing tetap konsisten sampai posisi tutup.
+#
+# Pemakaian per komponen (semua berbasis ATR pada setelan bawaan):
+#   SL        : stops.mode: atr        -> entry - stops.atr_multiplier x ATR
+#   TP        : take_profit.mode: atr  -> entry + take_profit.atr_multiplier x ATR
+#   BE        : breakeven.trigger_mode: auto -> mengikuti mode SL (basis ATR)
+#   Trailing  : trailing.mode: atr     -> high - trailing.atr_multiplier x ATR
+#
+# Contoh terukur (Binance spot 1m, ATR Wilder 14, diambil 2026-10-02):
+#   BTCUSDT harga 85.062,01  ATR 43,73 (0,051% harga)
+#           SL 1,5 x ATR = 84.996,42   TP 3 x ATR = 85.193,18
+#   SOLUSDT harga 119,92     ATR 0,0958 (0,080% harga)
+#   ETHUSDT harga 2.686,00   ATR 1,4765 (0,055% harga)
+# Koin yang sedang pump punya ATR jauh lebih besar (sering 1-3% harga), jadi
+# jaraknya otomatis melebar tanpa perlu mengubah config per koin.
+#
+# PERHATIAN penting soal biaya: pada koin besar yang tenang, 1,5 x ATR bisa
+# lebih SEMPIT daripada fee round-trip (2 x 0,1% = 0,2%). Stop yang lebih
+# sempit daripada biaya berarti posisi sudah rugi bersih sebelum sempat
+# bergerak. Untuk universe bot (koin pump) hal ini jarang terjadi, tapi
+# sebelum dipakai di mode live, jalankan tools backtest dan periksa kolom
+# trade yang kena SL: kalau mayoritas SL lebih kecil dari 0,2%, naikkan
+# atr_multiplier atau pakai min_stop_pct yang lebih besar.
+#
+# Kalau ATR tidak bisa dihitung (candle tertutup kurang dari period + 1, atau
+# data rusak), bot TIDAK diam-diam memakai angka nol: SL dan TP jatuh ke
+# fallback percent/rr dan kejadian itu dicatat di log serta tabel events.
+atr:
+  # Jumlah candle untuk rata-rata True Range. 14 adalah nilai klasik Wilder.
+  period: 14
+  # wilder -> pemulusan RMA (identik ta.atr di TradingView, lebih halus)
+  # sma    -> rata-rata sederhana (lebih reaktif ke lonjakan volatilitas)
+  method: wilder
+
 stops:
-  # Default SL tetap 1% di bawah entry. Mode structure tetap tersedia bila
-  # diperlukan, tetapi contoh strategi 1:2 menggunakan mode percent.
-  mode: percent
+  # structure -> di bawah swing low terdekat
+  # percent   -> persen tetap di bawah entry
+  # atr       -> entry - (atr_multiplier x ATR), ukuran volatilitas pasar
+  mode: atr
+  # Jarak SL saat mode atr. 1.5 x ATR adalah kompromi umum: cukup jauh untuk
+  # tahan noise 1 menit, cukup dekat agar ukuran posisi tidak mengecil.
+  atr_multiplier: 1.5
+  # Pengaman KHUSUS mode atr, satuannya kelipatan ATR. Kelipatan efektif
+  # dijepit ke rentang ini.
+  #
+  # PENTING: pengaman ini tidak memakai min_stop_pct/max_stop_pct (persen).
+  # Alasannya terukur: pada BTC 1m, 1.5 x ATR = 0,077% harga. Kalau batas
+  # persen 0,5% dipaksakan, SL ikut melebar jadi 0,5% padahal TP berbasis
+  # ATR tetap 0,154%, sehingga TP jadi LEBIH DEKAT daripada SL dan rasio
+  # imbal 1:2 berubah jadi 1:0,3. Karena itu pengaman ATR memakai satuan
+  # yang sama dengan basisnya.
+  atr_min_multiplier: 0.5
+  atr_max_multiplier: 4.0
+  # percent_pct hanya dipakai saat mode percent (dan sebagai fallback bila
+  # ATR tidak tersedia saat entry).
   percent_pct: 2.0
   structure_buffer_pct: 0.15
+  # max_stop_pct tetap berlaku di mode atr sebagai batas atas MUTLAK: ATR
+  # yang ekstrem (mis. koin baru listing) tidak boleh melebarkan risiko.
+  # min_stop_pct hanya berlaku untuk mode percent/structure.
   min_stop_pct: 0.5
   max_stop_pct: 10.0
 
 take_profit:
-  # Satu TP berbasis risk:reward. rr 2 + SL 1% = TP 2% (1:2).
-  mode: rr
+  # rr    -> TP = entry + rr x jarak SL (risk:reward)
+  # multi -> beberapa target dari daftar targets di bawah
+  # single-> hanya target pertama
+  # atr   -> TP = entry + (atr_multiplier x ATR)
+  mode: atr
   rr: 3.0
+  # Dengan SL 1.5 x ATR dan TP 3 x ATR, imbal rasio tetap 1:2 berapa pun
+  # nilai ATR-nya. Ubah salah satu kelipatan bila ingin rasio berbeda.
+  atr_multiplier: 3.0
 
 breakeven:
   enabled: true
-  # BE saat +1R, yaitu entry + 1 x jarak SL awal. Dengan TP 2R, BE aktif
-  # sebelum TP apa pun jarak SL yang digunakan.
+  # auto -> ikut basis SL (stops.mode). SL atr berarti BE ikut atr.
+  # rr   -> pemicu entry + trigger_rr x jarak SL awal (1R)
+  # atr  -> pemicu entry + trigger_atr_mult x ATR
+  trigger_mode: auto
+  # Dipakai saat basis rr. 2.0 berarti BE baru aktif setelah untung 2R.
   trigger_rr: 2.0
+  # Dipakai saat basis atr. 1.5 x ATR = 1R bila SL dipasang 1.5 x ATR.
+  trigger_atr_mult: 1.5
   # Buffer minimal 2x fee tetap dipakai agar BE tidak rugi karena biaya.
   buffer_pct: 0.3
 
 trailing:
-  # Aktif otomatis segera setelah BE; SL mengikuti harga tertinggi dengan
-  # jarak percent_pct. (Fitur ATR trailing sudah dihapus dari bot.)
+  # Aktif otomatis segera setelah BE; SL terus naik mengikuti harga tertinggi.
   enabled: true
+  # percent -> SL = highest x (1 - percent_pct%)
+  # atr     -> SL = highest - (atr_multiplier x ATR yang dibekukan saat entry)
+  mode: atr
   percent_pct: 1.0
+  # 2 x ATR dari puncak: lebih longgar dari SL awal supaya tren yang sehat
+  # tidak tertutup oleh koreksi normal.
+  atr_multiplier: 2.0
+  # SL hanya di-republish ke exchange kalau naik minimal sekian persen
+  # (hemat rate limit Binance).
   update_step_pct: 0.15
 
 execution:

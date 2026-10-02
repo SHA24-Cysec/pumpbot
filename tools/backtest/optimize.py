@@ -43,12 +43,24 @@ from tools.backtest.progress import ProgressUI
 from tools.backtest.signals import Entry, scan_all
 from tools.backtest.util import load_backtest_config, rows_to_candles
 
-# Grid default
+# Grid default (basis percent: satuan persen / kelipatan risiko)
 DEFAULT_SL = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
 DEFAULT_TP_RR = [1.0, 1.5, 2.0, 3.0, 4.0]
 DEFAULT_BE_RR = [0.0, 0.5, 0.75, 1.0]
 DEFAULT_BE_BUFFER = [0.2, 0.3, 0.5]
 DEFAULT_TRAIL = [0.0, 0.3, 0.5, 0.75, 1.0]
+
+# Grid default (basis ATR: satuan KELIPATAN ATR).
+# Rentangnya mencakup nilai bawaan config (SL 1.5, TP 3, BE 1.5, trailing 2)
+# dan sekitarnya, supaya hasil optimasi bisa langsung dibandingkan dengan
+# setelan yang sedang dipakai bot.
+DEFAULT_ATR_SL = [1.0, 1.5, 2.0, 2.5, 3.0]
+DEFAULT_ATR_TP = [2.0, 3.0, 4.0, 5.0, 6.0]
+DEFAULT_ATR_BE = [0.0, 1.0, 1.5, 2.0]
+DEFAULT_ATR_TRAIL = [0.0, 1.5, 2.0, 2.5, 3.0]
+DEFAULT_ATR_PERIOD = 14
+DEFAULT_ATR_METHOD = "wilder"
+BASES = ("percent", "atr")
 
 # Profit factor tak hingga dipotong di angka ini agar normalisasi tetap sehat.
 PF_CAP = 5.0
@@ -226,41 +238,61 @@ def build_signal_grid(cfg: Config, thr_list: list[float],
     return unik
 
 
-def canonical(sl: float, tp_rr: float, be_rr: float, be_buffer: float,
-              trail: float) -> tuple[float, float, float, float, float]:
+def canonical(basis: str, sl: float, tp: float, be: float, be_buffer: float,
+              trail: float) -> tuple:
     """
     Kanonikalisasi satu kombinasi agar duplikat fungsional hilang.
 
-    Aturan:
-      * be_rr <= 0 atau be_rr >= tp_rr  -> breakeven mati (BE tidak pernah
-        tercapai sebelum TP), buffer tidak relevan, dan trailing dipaksa mati
+    basis "percent" -> (sl_pct, tp_rr, be_rr, be_buffer, trail_pct)
+    basis "atr"     -> (sl_atr, tp_atr, be_atr, be_buffer, trail_atr)
+
+    Aturan (berlaku untuk kedua basis, dengan satuan masing-masing):
+      * be <= 0 atau be >= tp -> breakeven mati (pemicunya tidak akan pernah
+        tercapai sebelum TP). Be_tidak relevan dan trailing dipaksa mati
         karena di bot trailing hanya aktif setelah breakeven.
       * trail <= 0 -> trailing mati.
+
+    `be_buffer` tetap dipakai di kedua basis: setelah pemicu BE tercapai, SL
+    memang dipindah sedikit DI ATAS entry untuk menutup fee, dan besar buffer
+    itu memang diukur dalam persen harga.
     """
-    be_off = be_rr <= 0 or be_rr >= tp_rr
+    be_off = be <= 0 or be >= tp
     if be_off:
-        return (sl, tp_rr, 0.0, 0.0, 0.0)
+        return (sl, tp, 0.0, 0.0, 0.0)
     if trail <= 0:
-        return (sl, tp_rr, be_rr, be_buffer, 0.0)
-    return (sl, tp_rr, be_rr, be_buffer, trail)
+        return (sl, tp, be, be_buffer, 0.0)
+    return (sl, tp, be, be_buffer, trail)
 
 
 def build_grid(cfg: Config, sl_list: list[float], tp_list: list[float],
                be_list: list[float], buf_list: list[float],
                trail_list: list[float],
-               cooldown_list: Optional[list[float]] = None) -> list[Params]:
-    """Bangun daftar kombinasi unik, membuang sl_pct di luar batas config.
+               cooldown_list: Optional[list[float]] = None,
+               basis: str = "percent",
+               atr_sl_list: Optional[list[float]] = None,
+               atr_tp_list: Optional[list[float]] = None,
+               atr_be_list: Optional[list[float]] = None,
+               atr_trail_list: Optional[list[float]] = None,
+               atr_period: int = DEFAULT_ATR_PERIOD,
+               atr_method: str = DEFAULT_ATR_METHOD) -> list[Params]:
+    """
+    Bangun daftar kombinasi unik untuk satu basis.
+
+    basis "percent": perilaku lama. Setiap sl_pct di luar
+      [stops.min_stop_pct, stops.max_stop_pct] dibuang karena bot akan
+      menjepitnya, sehingga nilai itu tidak akan pernah dipakai apa adanya.
+
+    basis "atr": daftar sl_list/tp_list/be_list/trail_list diperlakukan
+      sebagai KELIPATAN ATR. Nilai ATR tidak dijepit oleh min/max_stop_pct
+      (batas itu hanya untuk basis persen), jadi tidak ada penyaringan di
+      sini; pengaman kelipatan (stops.atr_min_multiplier/max_multiplier)
+      diselesaikan di dalam initial_stop saat simulasi, sama seperti di bot.
 
     cooldown_list None atau [None] berarti pakai nilai config; daftar angka
     menambah dimensi cooldown (menit) pada grid.
     """
-    lo, hi = cfg.stops.min_stop_pct, cfg.stops.max_stop_pct
-    valid_sl = []
-    for sl in sl_list:
-        if sl < lo or sl > hi:
-            print(f"Peringatan: sl_pct {sl} di luar [{lo}, {hi}] -> dibuang")
-            continue
-        valid_sl.append(sl)
+    if basis not in BASES:
+        raise ValueError(f"basis '{basis}' harus salah satu dari {BASES}")
 
     cds: list[Optional[float]] = (
         [None] if not cooldown_list
@@ -268,25 +300,59 @@ def build_grid(cfg: Config, sl_list: list[float], tp_list: list[float],
 
     seen: set[tuple] = set()
     grid: list[Params] = []
+
+    if basis == "percent":
+        lo, hi = cfg.stops.min_stop_pct, cfg.stops.max_stop_pct
+        valid_sl = []
+        for sl in sl_list:
+            if sl < lo or sl > hi:
+                print(f"Peringatan: sl_pct {sl} di luar [{lo}, {hi}] -> dibuang")
+                continue
+            valid_sl.append(sl)
+        source_sl, source_tp = valid_sl, tp_list
+    else:
+        source_sl = atr_sl_list if atr_sl_list is not None else DEFAULT_ATR_SL
+        source_tp = atr_tp_list if atr_tp_list is not None else DEFAULT_ATR_TP
+        be_list = atr_be_list if atr_be_list is not None else DEFAULT_ATR_BE
+        trail_list = (atr_trail_list if atr_trail_list is not None
+                      else DEFAULT_ATR_TRAIL)
+
     for cd in cds:
-        for sl in valid_sl:
-            for tp in tp_list:
+        for sl in source_sl:
+            if sl <= 0:
+                continue
+            for tp in source_tp:
                 if tp <= 0:
                     continue
                 for be in be_list:
                     for buf in buf_list:
                         for tr in trail_list:
-                            key = canonical(sl, tp, be, buf, tr) + (cd,)
+                            key = canonical(basis, sl, tp, be, buf, tr) + (cd,)
                             if key in seen:
                                 continue
                             seen.add(key)
-                            grid.append(Params(
-                                sl_pct=key[0], tp_rr=key[1], be_rr=key[2],
-                                be_buffer_pct=key[3], trail_pct=key[4],
-                                trail_step_pct=cfg.trailing.update_step_pct,
-                                fee_pct=cfg.risk.fee_pct, slippage_pct=0.0,
-                                cooldown_min=cd,
-                            ))
+                            if basis == "percent":
+                                grid.append(Params(
+                                    sl_pct=key[0], tp_rr=key[1], be_rr=key[2],
+                                    be_buffer_pct=key[3], trail_pct=key[4],
+                                    trail_step_pct=cfg.trailing.update_step_pct,
+                                    fee_pct=cfg.risk.fee_pct, slippage_pct=0.0,
+                                    cooldown_min=cd, basis="percent",
+                                ))
+                            else:
+                                grid.append(Params(
+                                    sl_pct=cfg.stops.percent_pct,
+                                    tp_rr=cfg.take_profit.rr,
+                                    be_rr=cfg.breakeven.trigger_rr,
+                                    be_buffer_pct=key[3],
+                                    trail_pct=cfg.trailing.percent_pct,
+                                    trail_step_pct=cfg.trailing.update_step_pct,
+                                    fee_pct=cfg.risk.fee_pct, slippage_pct=0.0,
+                                    cooldown_min=cd, basis="atr",
+                                    sl_atr=key[0], tp_atr=key[1], be_atr=key[2],
+                                    trail_atr=key[4], atr_period=int(atr_period),
+                                    atr_method=atr_method,
+                                ))
     return grid
 
 
@@ -627,8 +693,25 @@ def _fmt_cd(value: Optional[float]) -> str:
     return "-" if value is None else f"{value:g}"
 
 
+def _fmt_exit_val(p: Params, kolom: str) -> str:
+    """
+    Format satu nilai parameter exit sesuai basisnya.
+
+    basis atr -> angka kelipatan ATR dengan akhiran 'x' (mis. '1.50x'),
+    supaya di tabel tidak tertukar dengan persen pada basis percent.
+    """
+    if p.basis == "atr":
+        nilai = {"sl": p.sl_atr, "tp": p.tp_atr, "be": p.be_atr,
+                 "tr": p.trail_atr}[kolom]
+        return f"{nilai:.2f}x"
+    nilai = {"sl": p.sl_pct, "tp": p.tp_rr, "be": p.be_rr,
+             "tr": p.trail_pct}[kolom]
+    return f"{nilai:.2f}"
+
+
 def print_table(rows: list[dict], oos_map: Optional[dict] = None,
-                top: int = 10, vwap_enabled: Optional[bool] = None) -> None:
+                top: int = 10, vwap_enabled: Optional[bool] = None,
+                band24_text: str = "") -> None:
     """Cetak tabel top K kombinasi beserta metrik in sample dan out of sample.
 
     Kolom sinyal: THR = threshold, WPA = rasio bobot price action,
@@ -637,22 +720,28 @@ def print_table(rows: list[dict], oos_map: Optional[dict] = None,
     """
     if vwap_enabled is not None:
         print(f"Filter Anchored VWAP: {'AKTIF' if vwap_enabled else 'MATI'}")
+    if band24_text:
+        print(f"Gate band perubahan 24 jam (nilai absolut): {band24_text}")
     header = (f"{'#':>2} {'THR':>4} {'WPA':>4} {'MA':>3} {'SPK':>4} "
-              f"{'STR':>3} {'BRK':>3} {'CD':>4} "
-              f"{'SL%':>5} {'TP':>4} {'BE':>4} {'BUF':>4} {'TR%':>4} "
+              f"{'STR':>3} {'BRK':>3} {'CD':>4} {'BASIS':>7} "
+              f"{'SL':>6} {'TP':>6} {'BE':>6} {'BUF':>4} {'TR':>6} "
               f"{'N':>4} {'WIN%':>6} {'RET%':>9} {'PF':>6} "
               f"{'MDD%':>7} {'SKOR':>6}")
     if oos_map:
         header += f" | {'N':>4} {'RET%':>9} {'PF':>6} {'MDD%':>7}"
     print(header)
     print("-" * len(header))
+    print("Satuan kolom exit: basis percent -> SL/TP/BE/TR dalam persen & "
+          "kelipatan risiko; basis atr -> semuanya kelipatan ATR ('x').")
     for i, r in enumerate(rows[:top], 1):
         p, m, sp = r["params"], r["metrics"], r["signal"]
         line = (f"{i:>2} {sp.threshold:>4g} {sp.w_pa:>4g} {sp.ma_period:>3d} "
                 f"{sp.spike_scale:>4g} {sp.structure_candles:>3d} "
                 f"{sp.breakout_lookback:>3d} {_fmt_cd(p.cooldown_min):>4} "
-                f"{p.sl_pct:>5.2f} {p.tp_rr:>4.2f} {p.be_rr:>4.2f} "
-                f"{p.be_buffer_pct:>4.2f} {p.trail_pct:>4.2f} "
+                f"{'atr' if p.basis == 'atr' else 'persen':>7} "
+                f"{_fmt_exit_val(p, 'sl'):>6} {_fmt_exit_val(p, 'tp'):>6} "
+                f"{_fmt_exit_val(p, 'be'):>6} "
+                f"{p.be_buffer_pct:>4.2f} {_fmt_exit_val(p, 'tr'):>6} "
                 f"{m['trades']:>4} {m['win_rate']:>6.2f} "
                 f"{m['net_return_pct']:>9.2f} {_fmt_pf(m['profit_factor']):>6} "
                 f"{m['max_dd_pct']:>7.2f} "
@@ -671,7 +760,9 @@ def print_table(rows: list[dict], oos_map: Optional[dict] = None,
 
 
 def write_results_csv(rows: list[dict], path: str = RESULTS_CSV,
-                      oos_map: Optional[dict] = None) -> str:
+                      oos_map: Optional[dict] = None,
+                      vwap_status: str = "",
+                      band24_status: str = "") -> str:
     """Tulis seluruh hasil grid ke CSV.
 
     Kolom sinyal (threshold sampai min_candles) mengidentifikasi kombinasi
@@ -682,12 +773,17 @@ def write_results_csv(rows: list[dict], path: str = RESULTS_CSV,
     fields = ["threshold", "w_pa", "ma_period", "spike_scale",
               "structure_candles", "breakout_lookback", "swing_neighbors",
               "min_candles",
-              "sl_pct", "tp_rr", "be_rr", "be_buffer_pct", "trail_pct",
+              "basis", "sl_pct", "tp_rr", "be_rr", "be_buffer_pct", "trail_pct",
+              "sl_atr", "tp_atr", "be_atr", "trail_atr", "atr_period",
+              "atr_method",
               "trail_step_pct", "fee_pct", "cooldown_min", "trades", "win_rate",
               "net_return_pct", "profit_factor", "max_dd_pct", "avg_r",
               "expectancy", "score", "disqualified",
               "oos_trades", "oos_net_return_pct", "oos_profit_factor",
-              "oos_max_dd_pct"]
+              "oos_max_dd_pct",
+              # Dua kolom terakhir membuat CSV lama tetap bisa dibaca tanpa
+              # menebak filter mana yang aktif saat baris itu dibuat.
+              "vwap", "change24h"]
     with open(path, "w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
@@ -701,8 +797,15 @@ def write_results_csv(rows: list[dict], path: str = RESULTS_CSV,
                 "breakout_lookback": sp.breakout_lookback,
                 "swing_neighbors": sp.swing_neighbors,
                 "min_candles": sp.min_candles,
+                "basis": p.basis,
                 "sl_pct": p.sl_pct, "tp_rr": p.tp_rr, "be_rr": p.be_rr,
                 "be_buffer_pct": p.be_buffer_pct, "trail_pct": p.trail_pct,
+                # Kolom ATR hanya bermakna bila basis = atr; kolom percent
+                # hanya bermakna bila basis = percent (yang tidak dipakai
+                # tetap ditulis apa adanya supaya lebar kolom konsisten).
+                "sl_atr": p.sl_atr, "tp_atr": p.tp_atr, "be_atr": p.be_atr,
+                "trail_atr": p.trail_atr, "atr_period": p.atr_period,
+                "atr_method": p.atr_method,
                 "trail_step_pct": p.trail_step_pct, "fee_pct": p.fee_pct,
                 "cooldown_min": ("" if p.cooldown_min is None
                                  else p.cooldown_min),
@@ -718,12 +821,54 @@ def write_results_csv(rows: list[dict], path: str = RESULTS_CSV,
                 "oos_profit_factor": (_fmt_pf(om["profit_factor"])
                                       if om else ""),
                 "oos_max_dd_pct": om.get("max_dd_pct", ""),
+                "vwap": vwap_status,
+                "change24h": band24_status,
             })
     return path
 
 
 def yaml_snippet(p: Params, cfg: Config) -> str:
-    """Cuplikan YAML siap tempel untuk config.yaml."""
+    """
+    Cuplikan YAML siap tempel untuk config.yaml.
+
+    Ada dua bentuk sesuai basis hasil: basis atr menghasilkan blok `atr`,
+    `stops.mode: atr`, `take_profit.mode: atr`, `breakeven.trigger_mode: atr`,
+    dan `trailing.mode: atr`; basis percent menghasilkan bentuk lama. Kedua
+    bentuk ditulis lengkap agar hasil tempel-langsung tidak meninggalkan
+    campuran basis (mis. mode atr dengan kelipatan persen).
+    """
+    if p.basis == "atr":
+        be_on = p.be_atr > 0 and p.be_atr < p.tp_atr
+        tr_on = be_on and p.trail_atr > 0
+        return (
+            "atr:\n"
+            f"  period: {p.atr_period}\n"
+            f"  method: {p.atr_method}\n"
+            "\n"
+            "stops:\n"
+            "  mode: atr\n"
+            f"  atr_multiplier: {p.sl_atr}\n"
+            f"  atr_min_multiplier: {cfg.stops.atr_min_multiplier}\n"
+            f"  atr_max_multiplier: {cfg.stops.atr_max_multiplier}\n"
+            f"  min_stop_pct: {cfg.stops.min_stop_pct}\n"
+            f"  max_stop_pct: {cfg.stops.max_stop_pct}\n"
+            "\n"
+            "take_profit:\n"
+            "  mode: atr\n"
+            f"  atr_multiplier: {p.tp_atr}\n"
+            "\n"
+            "breakeven:\n"
+            f"  enabled: {'true' if be_on else 'false'}\n"
+            "  trigger_mode: atr\n"
+            f"  trigger_atr_mult: {p.be_atr if be_on else cfg.breakeven.trigger_atr_mult}\n"
+            f"  buffer_pct: {p.be_buffer_pct}\n"
+            "\n"
+            "trailing:\n"
+            f"  enabled: {'true' if tr_on else 'false'}\n"
+            "  mode: atr\n"
+            f"  atr_multiplier: {p.trail_atr if tr_on else cfg.trailing.atr_multiplier}\n"
+            f"  update_step_pct: {p.trail_step_pct}\n"
+        )
     be_enabled = "true" if p.be_rr > 0 else "false"
     tr_enabled = "true" if p.trail_pct > 0 else "false"
     be_trigger = p.be_rr if p.be_rr > 0 else cfg.breakeven.trigger_rr
@@ -807,9 +952,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--be", default="", help="daftar be_rr dipisah koma")
     p.add_argument("--be-buffer", default="", help="daftar be_buffer_pct")
     p.add_argument("--trail", default="", help="daftar trail_pct")
+    p.add_argument("--basis", choices=("percent", "atr", "both"), default="both",
+                   help="basis parameter exit: 'atr' (kelipatan ATR), "
+                        "'percent' (persen & kelipatan risiko), atau 'both' "
+                        "untuk membandingkan keduanya (default)")
+    p.add_argument("--atr-sl", default="",
+                   help="daftar kelipatan ATR untuk jarak SL")
+    p.add_argument("--atr-tp", default="",
+                   help="daftar kelipatan ATR untuk jarak TP")
+    p.add_argument("--atr-be", default="",
+                   help="daftar kelipatan ATR pemicu BE (0 = mati)")
+    p.add_argument("--atr-trail", default="",
+                   help="daftar kelipatan ATR trailing (0 = mati)")
+    p.add_argument("--atr-period", type=int, default=DEFAULT_ATR_PERIOD,
+                   help=f"periode ATR (default {DEFAULT_ATR_PERIOD})")
+    p.add_argument("--atr-method", choices=("wilder", "sma"),
+                   default=DEFAULT_ATR_METHOD,
+                   help=f"pemulusan ATR (default {DEFAULT_ATR_METHOD})")
     p.add_argument("--vwap", choices=("config", "on", "off"), default="config",
                    help="filter Anchored VWAP: ikut config (default), paksa on, "
                         "atau paksa off")
+    p.add_argument("--change24h", choices=("config", "on", "off"), default="config",
+                   help="gate band perubahan 24 jam (signal.change_24h, "
+                        "nilai absolut): ikut config (default), paksa on, "
+                        "atau paksa off")
+    p.add_argument("--change24h-min", type=float, default=None,
+                   help="override batas bawah band perubahan 24 jam (persen, nilai absolut)")
+    p.add_argument("--change24h-max", type=float, default=None,
+                   help="override batas atas band perubahan 24 jam (persen, nilai absolut)")
     p.add_argument("--config", default=os.path.join("config", "config.yaml"))
     p.add_argument("--data-dir", default=DATA_DIR)
     p.add_argument("--results", default=RESULTS_CSV)
@@ -830,6 +1000,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         cfg.signal.vwap.enabled = False
     vwap_status = ("AKTIF" if cfg.signal.vwap.enabled else "MATI")
     print(f"Filter Anchored VWAP: {vwap_status} (--vwap {args.vwap})")
+
+    # Override gate band perubahan 24 jam sebelum variant_cfg menyalin config.
+    if args.change24h == "on":
+        cfg.signal.change_24h.enabled = True
+    elif args.change24h == "off":
+        cfg.signal.change_24h.enabled = False
+    if args.change24h_min is not None:
+        cfg.signal.change_24h.min_pct = float(args.change24h_min)
+    if args.change24h_max is not None:
+        cfg.signal.change_24h.max_pct = float(args.change24h_max)
+    if cfg.signal.change_24h.min_pct > cfg.signal.change_24h.max_pct:
+        print("Peringatan: --change24h-min lebih besar dari --change24h-max "
+              "-> tidak ada koin yang bisa lolos gate")
+    if cfg.signal.change_24h.enabled:
+        band24_text = (f"AKTIF {cfg.signal.change_24h.min_pct:g}%.."
+                       f"{cfg.signal.change_24h.max_pct:g}% "
+                       f"(--change24h {args.change24h})")
+    else:
+        band24_text = f"MATI (--change24h {args.change24h})"
+    print(f"Gate band perubahan 24 jam (nilai absolut): {band24_text}")
 
     # Bangun kedua grid sebelum area progres supaya peringatannya tampil biasa.
     if args.thr.strip():
@@ -852,22 +1042,56 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("Grid sinyal kosong setelah validasi.")
         return 1
 
+    if args.atr_period < 2:
+        print("--atr-period minimal 2.")
+        return 1
+
     cds = parse_floats(args.cooldown, [])
-    exit_grid = build_grid(
-        cfg,
-        parse_floats(args.sl, DEFAULT_SL),
-        parse_floats(args.tp, DEFAULT_TP_RR),
-        parse_floats(args.be, DEFAULT_BE_RR),
-        parse_floats(args.be_buffer, DEFAULT_BE_BUFFER),
-        parse_floats(args.trail, DEFAULT_TRAIL),
-        cooldown_list=cds or None,
-    )
+    if args.basis == "both":
+        bases = ("percent", "atr")
+    else:
+        bases = (args.basis,)
+
+    exit_grid: list[Params] = []
+    for basis in bases:
+        if basis == "atr":
+            bagian = build_grid(
+                cfg,
+                parse_floats(args.sl, DEFAULT_SL),
+                parse_floats(args.tp, DEFAULT_TP_RR),
+                parse_floats(args.be, DEFAULT_BE_RR),
+                parse_floats(args.be_buffer, DEFAULT_BE_BUFFER),
+                parse_floats(args.trail, DEFAULT_TRAIL),
+                cooldown_list=cds or None,
+                basis="atr",
+                atr_sl_list=parse_floats(args.atr_sl, DEFAULT_ATR_SL),
+                atr_tp_list=parse_floats(args.atr_tp, DEFAULT_ATR_TP),
+                atr_be_list=parse_floats(args.atr_be, DEFAULT_ATR_BE),
+                atr_trail_list=parse_floats(args.atr_trail, DEFAULT_ATR_TRAIL),
+                atr_period=args.atr_period,
+                atr_method=args.atr_method,
+            )
+        else:
+            bagian = build_grid(
+                cfg,
+                parse_floats(args.sl, DEFAULT_SL),
+                parse_floats(args.tp, DEFAULT_TP_RR),
+                parse_floats(args.be, DEFAULT_BE_RR),
+                parse_floats(args.be_buffer, DEFAULT_BE_BUFFER),
+                parse_floats(args.trail, DEFAULT_TRAIL),
+                cooldown_list=cds or None,
+                basis="percent",
+            )
+        exit_grid.extend(bagian)
     if not exit_grid:
         print("Grid exit kosong setelah validasi.")
         return 1
+    n_atr = sum(1 for x in exit_grid if x.basis == "atr")
+    n_pct = len(exit_grid) - n_atr
     print(f"Kombinasi sinyal: {len(signal_grid)} "
           f"(tiap kombinasi = 1 scan penuh)")
-    print(f"Kombinasi exit  : {len(exit_grid)}")
+    print(f"Kombinasi exit  : {len(exit_grid)} "
+          f"({n_atr} basis ATR, {n_pct} basis persen/R)")
     print(f"Total baris     : {len(signal_grid) * len(exit_grid)}")
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -984,9 +1208,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print()
     print_table(rows, oos_map if oos_map else None, args.top,
-                vwap_enabled=cfg.signal.vwap.enabled)
+                vwap_enabled=cfg.signal.vwap.enabled, band24_text=band24_text)
 
-    path = write_results_csv(rows, args.results, oos_map)
+    path = write_results_csv(rows, args.results, oos_map,
+                             vwap_status=vwap_status,
+                             band24_status=band24_text)
     print(f"\nCSV lengkap: {path}")
 
     if ranked:
@@ -999,10 +1225,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(yaml_snippet(best, cfg))
 
     print("Parameter yang TIDAK dioptimasi di sini:")
-    print(f"  stops.mode            : {cfg.stops.mode} (hanya percent yang diuji)")
+    print(f"  basis yang diuji      : {', '.join(bases)} "
+          f"(--basis {args.basis})")
     print("  take_profit multi target dan porsi jual parsial")
+    print(f"  stops.atr_min_multiplier / atr_max_multiplier tetap "
+          f"{cfg.stops.atr_min_multiplier} / {cfg.stops.atr_max_multiplier} "
+          f"dari config (pengaman, bukan target optimasi)")
     print(f"  trailing.update_step_pct tetap {cfg.trailing.update_step_pct} "
           f"dari config")
+    print(f"  gate band perubahan 24 jam (nilai absolut): {band24_text}")
+    print(f"  ATR periode {args.atr_period} metode {args.atr_method}: "
+          f"trade yang candle historisnya belum cukup DILEWATI, bukan memakai "
+          f"ATR 0")
     print("  LOT_SIZE dan MIN_NOTIONAL diabaikan (asumsi qty pecahan bebas)")
     return 0
 

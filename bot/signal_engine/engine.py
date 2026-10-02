@@ -21,8 +21,9 @@ from typing import Awaitable, Callable, Optional
 from bot.config import Config
 from bot.data_collector.collector import DataCollector
 from bot.models import Signal
+from bot.signal_engine.change24h import FILTER_DETECTORS as CHANGE24H_FILTERS
 from bot.signal_engine.detectors import ALL_DETECTORS
-from bot.signal_engine.vwap import FILTER_DETECTORS
+from bot.signal_engine.vwap import FILTER_DETECTORS as VWAP_FILTERS
 from bot.utils import clamp, now_ms
 
 logger = logging.getLogger("pumpbot.signal")
@@ -39,10 +40,14 @@ class SignalEngine:
         self.latest: dict[str, dict] = {}
         self.paused = False                     # diatur dari dashboard
         self._detectors = {name: cls() for name, cls in ALL_DETECTORS.items()}
-        # Filter gate (tidak menyumbang skor), mis. Anchored VWAP.
-        self._filters = {name: cls() for name, cls in FILTER_DETECTORS.items()}
+        # Filter gate (tidak menyumbang skor): Anchored VWAP dan band
+        # perubahan 24 jam (nilai absolut). Keduanya hanya menentukan
+        # `eligible`.
+        self._filters = {name: cls() for name, cls in
+                         {**VWAP_FILTERS, **CHANGE24H_FILTERS}.items()}
         # Override runtime dari dashboard: None = ikut config.
         self.vwap_enabled_override: Optional[bool] = None
+        self.change24h_enabled_override: Optional[bool] = None
         # provider waktu aktivitas terakhir per simbol (untuk cooldown),
         # di-inject dari main (membaca database)
         self.cooldown_provider: Callable[[str], float] = lambda sym: 1e9
@@ -56,6 +61,12 @@ class SignalEngine:
         if self.vwap_enabled_override is not None:
             return bool(self.vwap_enabled_override)
         return bool(self.cfg.signal.vwap.enabled)
+
+    def _change24h_enabled(self) -> bool:
+        """Gate band perubahan 24 jam (nilai absolut) aktif? Override menang."""
+        if self.change24h_enabled_override is not None:
+            return bool(self.change24h_enabled_override)
+        return bool(self.cfg.signal.change_24h.enabled)
 
     # ------------------------------------------------------------------
     def evaluate(self, symbol: str) -> Optional[dict]:
@@ -98,6 +109,15 @@ class SignalEngine:
             vwap_ok = bool(vres.eligible)
             eligible = eligible and vwap_ok
 
+        # --- gate band perubahan 24 jam, nilai absolut (bukan skor) ---
+        band_ok = True
+        band_info = None
+        if self._change24h_enabled():
+            cres = self._filters["change24h"].score(buf, cfg)
+            band_info = dict(cres.details)
+            band_ok = bool(cres.eligible)
+            eligible = eligible and band_ok
+
         veto = manip.veto
         snapshot = {
             "symbol": symbol,
@@ -112,6 +132,8 @@ class SignalEngine:
         }
         if vwap_info is not None:
             snapshot["vwap"] = vwap_info
+        if band_info is not None:
+            snapshot["change_24h"] = band_info
         self.latest[symbol] = snapshot
         self.evaluated += 1
 
@@ -121,9 +143,13 @@ class SignalEngine:
             bad = [n for n in pos_names if not results[n].eligible]
             if not vwap_ok:
                 bad.append("vwap")
+            if not band_ok:
+                bad.append("change24h")
             reason = f"gate: {','.join(bad)}"
             if not vwap_ok and vwap_info:
                 reason += f" ({vwap_info.get('reason', '')})"
+            if not band_ok and band_info:
+                reason += f" ({band_info.get('reason', '')})"
             snapshot["reason"] = reason
         return snapshot
 
@@ -176,9 +202,14 @@ class SignalEngine:
                             "scores": snapshot["breakdown"],
                             "manip": snapshot["manip_details"],
                             "vwap": snapshot.get("vwap"),
+                            "change24h": snapshot.get("change_24h"),
                         },
                         suggested_stop=self._structure_stop(symbol),
                         entry_type="breakout",
+                        # ATR candle tertutup terakhir. Executor yang membekukan
+                        # nilai ini ke posisi (pos.atr_entry) dan seluruh basis
+                        # ATR posisi memakai angka yang sama seumur posisi.
+                        atr=self.collector.atr(symbol),
                         reason=(
                             f"skor {snapshot['score']:.0f} >= {self._runtime_threshold():.0f}; "
                             f"detail={snapshot['breakdown']}"
@@ -186,9 +217,12 @@ class SignalEngine:
                     )
                     vw = snapshot.get("vwap")
                     vwap_txt = (f" vwap_dist={vw.get('dist_pct')}%" if vw else "")
+                    c24 = snapshot.get("change_24h")
+                    c24_txt = (f" chg24={c24.get('change_pct')}%"
+                               if c24 else "")
                     logger.info(
                         f"SINYAL {symbol} @ {sig.price:.6f} skor={sig.score:.0f} "
-                        f"breakdown={snapshot['breakdown']}{vwap_txt}"
+                        f"breakdown={snapshot['breakdown']}{vwap_txt}{c24_txt}"
                     )
                     try:
                         await self.on_signal(sig)

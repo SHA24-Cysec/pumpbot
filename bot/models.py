@@ -199,6 +199,7 @@ class Signal:
     suggested_stop: float        # usulan SL awal (dari struktur/percent)
     entry_type: str = "breakout"  # breakout | pullback
     reason: str = ""
+    atr: float = 0.0             # ATR saat sinyal (0.0 = belum bisa dihitung)
 
 
 # ============================================================================
@@ -242,6 +243,10 @@ class Position:
     stop_loss: float          # SL aktif saat ini (bisa berpindah: BE/trailing)
     initial_stop: float       # SL awal (untuk hitung risiko terpakai)
     take_profits: list[float] # daftar harga TP (urut naik)
+    # ATR yang DIBEKUKAN saat entry (satuan harga). Dipakai SL/TP/BE/trailing
+    # berbasis ATR sepanjang umur posisi. 0.0 berarti ATR tidak tersedia saat
+    # entry (data kurang) sehingga basis ATR jatuh ke fallback persen.
+    atr_entry: float = 0.0
     chunks: list[ExitChunk] = field(default_factory=list)
     be_triggered: bool = False
     trail_active: bool = False
@@ -288,6 +293,7 @@ class Position:
             "stop_loss": self.stop_loss,
             "initial_stop": self.initial_stop,
             "take_profits": self.take_profits,
+            "atr_entry": self.atr_entry,
             "be_triggered": self.be_triggered,
             "trail_active": self.trail_active,
             "highest_price": self.highest_price,

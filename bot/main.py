@@ -227,11 +227,12 @@ class BotApp:
         notify(f"⏸ Bot {'di-pause' if paused else 'resume'}.")
 
     def apply_runtime_flags(self) -> None:
-        """Terapkan parameter live (threshold, trailing, breakeven, VWAP)."""
+        """Terapkan parameter live (threshold, trailing, breakeven, VWAP, band 24 jam)."""
         self.cfg.trailing.enabled = self.risk.params.trailing_enabled
         self.cfg.breakeven.enabled = self.risk.params.breakeven_enabled
         self.engine._override_threshold = self.risk.params.score_threshold
         self.engine.vwap_enabled_override = self.risk.params.vwap_filter_enabled
+        self.engine.change24h_enabled_override = self.risk.params.change24h_enabled
 
     # ------------------------------------------------------------------
     # Pemulihan posisi setelah restart
@@ -421,6 +422,10 @@ class BotApp:
                     qty_total=r["qty_total"], qty_remaining=qty_rem,
                     quote_value=r["quote_value"], stop_loss=r["stop_loss"],
                     initial_stop=r["initial_stop"] or r["stop_loss"],
+                    # Basis ATR posisi dipulihkan apa adanya dari DB. Nilainya
+                    # TIDAK dihitung ulang dari harga sekarang: ATR yang
+                    # berbeda akan menggeser SL/TP posisi yang masih terbuka.
+                    atr_entry=float(r.get("atr_entry") or 0.0),
                     take_profits=tps, chunks=chunks,
                     be_triggered=bool(r["be_triggered"]),
                     trail_active=bool(r["trail_active"]),

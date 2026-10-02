@@ -40,6 +40,10 @@ class RuntimeParams:
     breakeven_enabled: bool
     # Filter Anchored VWAP (gate entry); false = perilaku tanpa filter.
     vwap_filter_enabled: bool = False
+    # Gate band perubahan 24 jam (nilai absolut, 6%..10%): true = hanya koin
+    # dengan besar pergerakan di dalam band yang boleh masuk. Bisa dimatikan
+    # sementara dari dashboard tanpa restart.
+    change24h_enabled: bool = True
 
     @property
     def effective_open_position_limit(self) -> int:
@@ -65,6 +69,7 @@ class RiskManager:
             trailing_enabled=cfg.trailing.enabled,
             breakeven_enabled=cfg.breakeven.enabled,
             vwap_filter_enabled=cfg.signal.vwap.enabled,
+            change24h_enabled=cfg.signal.change_24h.enabled,
         )
         self._lock = threading.Lock()
 
@@ -82,7 +87,7 @@ class RiskManager:
         bool_keys = {
             "allow_multiple_positions", "daily_loss_enabled",
             "trailing_enabled", "breakeven_enabled",
-            "vwap_filter_enabled",
+            "vwap_filter_enabled", "change24h_enabled",
         }
         int_keys = {"max_open_positions"}
 

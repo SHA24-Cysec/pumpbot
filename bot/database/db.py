@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS trades (
     quote_value      REAL    NOT NULL,
     stop_loss        REAL,
     initial_stop     REAL,
+    -- ATR yang dibekukan saat entry (basis SL/TP/BE/trailing mode ATR).
+    -- 0 = saat entry ATR tidak tersedia sehingga bot memakai fallback persen.
+    atr_entry        REAL    NOT NULL DEFAULT 0,
     take_profits     TEXT,                               -- JSON list harga TP
     be_triggered     INTEGER NOT NULL DEFAULT 0,
     trail_active     INTEGER NOT NULL DEFAULT 0,
@@ -114,7 +117,7 @@ class Database:
         "status", "qty_remaining", "stop_loss", "initial_stop", "take_profits",
         "be_triggered", "trail_active", "highest_price", "realized_pnl",
         "fees_paid", "exit_time", "exit_price", "exit_reason", "exit_mode",
-        "score", "entry_reason", "quote_value",
+        "score", "entry_reason", "quote_value", "atr_entry",
     })
 
     def __init__(self, path: str = "data/pumpbot.db"):
@@ -127,8 +130,26 @@ class Database:
             self._conn.execute("PRAGMA journal_mode=WAL")   # aman utk baca-tulis bersamaan
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
         logger.info(f"Database siap: {path}")
+
+    def _migrate(self) -> None:
+        """
+        Tambahkan kolom baru pada database yang sudah ada (idempoten).
+
+        `CREATE TABLE IF NOT EXISTS` tidak menyentuh tabel yang sudah terbuat,
+        jadi database dari versi sebelumnya tidak akan punya kolom baru dan
+        INSERT akan gagal. ALTER TABLE ADD COLUMN di SQLite tidak menghapus
+        data dan aman dijalankan berkali-kali bila kolomnya sudah dicek lebih
+        dulu. Pemanggil: Database.__init__ (lock sudah dipegang).
+        """
+        cols = {r["name"] for r in
+                self._conn.execute("PRAGMA table_info(trades)").fetchall()}
+        if "atr_entry" not in cols:
+            self._conn.execute(
+                "ALTER TABLE trades ADD COLUMN atr_entry REAL NOT NULL DEFAULT 0")
+            logger.info("Migrasi DB: kolom trades.atr_entry ditambahkan")
 
     def close(self) -> None:
         with self._lock:
@@ -146,15 +167,16 @@ class Database:
     def open_trade(self, symbol: str, entry_time: int, entry_price: float,
                    qty: float, quote_value: float, stop_loss: float,
                    take_profits: list[float], score: float, entry_reason: str,
-                   exit_mode: str) -> int:
+                   exit_mode: str, atr_entry: float = 0.0) -> int:
         tp_json = json.dumps([round(p, 10) for p in take_profits])
         trade_id = self._exec(
             """INSERT INTO trades (symbol, status, entry_time, entry_price, qty_total,
                qty_remaining, quote_value, stop_loss, initial_stop, take_profits,
-               highest_price, score, entry_reason, exit_mode)
-               VALUES (?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               highest_price, score, entry_reason, exit_mode, atr_entry)
+               VALUES (?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (symbol, entry_time, entry_price, qty, qty, quote_value,
-             stop_loss, stop_loss, tp_json, entry_price, score, entry_reason, exit_mode))
+             stop_loss, stop_loss, tp_json, entry_price, score, entry_reason,
+             exit_mode, float(atr_entry or 0.0)))
         self.add_trade_event(trade_id, "ENTRY", entry_price, qty, 0.0,
                              f"score={score:.0f}; {entry_reason}")
         return trade_id

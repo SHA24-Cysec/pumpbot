@@ -165,6 +165,7 @@ class ParamsBody(BaseModel):
     trailing_enabled: Optional[bool] = None
     breakeven_enabled: Optional[bool] = None
     vwap_filter_enabled: Optional[bool] = None
+    change24h_enabled: Optional[bool] = None
 
 
 class BacktestBody(BaseModel):
@@ -183,11 +184,18 @@ class BacktestBody(BaseModel):
     w_pf: Optional[float] = None
     w_dd: Optional[float] = None
     top_rows: Optional[int] = None
+    basis: Optional[str] = None
     sl: Optional[str] = None
     tp: Optional[str] = None
     be: Optional[str] = None
     be_buffer: Optional[str] = None
     trail: Optional[str] = None
+    atr_sl: Optional[str] = None
+    atr_tp: Optional[str] = None
+    atr_be: Optional[str] = None
+    atr_trail: Optional[str] = None
+    atr_period: Optional[int] = None
+    atr_method: Optional[str] = None
     cooldown: Optional[str] = None
     thr: Optional[str] = None
     wpa: Optional[str] = None
@@ -198,6 +206,7 @@ class BacktestBody(BaseModel):
     swing: Optional[str] = None
     min_candles: Optional[str] = None
     vwap: Optional[str] = None
+    change24h: Optional[str] = None
 
 
 class ApplyBody(BaseModel):
@@ -234,6 +243,9 @@ def build_snapshot(ctx, backtest=None) -> dict:
             "value": pos.qty_remaining * price,
             "stop_loss": pos.stop_loss,
             "take_profits": pos.take_profits,
+            # ATR yang dibekukan saat entry; 0 = basis ATR tidak tersedia
+            # untuk posisi ini (trailing/BE-nya memakai basis persen/R).
+            "atr_entry": float(getattr(pos, "atr_entry", 0.0) or 0.0),
             "be_triggered": pos.be_triggered,
             "trail_active": pos.trail_active,
             "highest_price": pos.highest_price,
@@ -524,17 +536,38 @@ def create_dashboard_app(ctx) -> FastAPI:
             "min_candles": cfg.signal.min_candles,
             "cooldown_after_exit_min": cfg.signal.cooldown_after_exit_min,
             "vwap_enabled": bool(cfg.signal.vwap.enabled),
+            # Gate band perubahan 24 jam (nilai absolut); dikirim supaya
+            # formulir backtest menampilkan band yang sedang dipakai.
+            "change24h_enabled": bool(cfg.signal.change_24h.enabled),
+            "change24h_min_pct": cfg.signal.change_24h.min_pct,
+            "change24h_max_pct": cfg.signal.change_24h.max_pct,
+            "atr_period": cfg.atr.period,
+            "atr_method": cfg.atr.method,
+            "atr_sl": cfg.stops.atr_multiplier,
+            "atr_tp": cfg.take_profit.atr_multiplier,
+            "atr_be": cfg.breakeven.trigger_atr_mult,
+            "atr_trail": cfg.trailing.atr_multiplier,
+            "atr_min_multiplier": cfg.stops.atr_min_multiplier,
+            "atr_max_multiplier": cfg.stops.atr_max_multiplier,
             "current_exit": {
                 "stops_mode": cfg.stops.mode,
                 "sl_pct": cfg.stops.percent_pct,
+                "sl_atr_mult": cfg.stops.atr_multiplier,
                 "tp_mode": cfg.take_profit.mode,
                 "tp_rr": getattr(cfg.take_profit, "rr", None),
+                "tp_atr_mult": cfg.take_profit.atr_multiplier,
                 "be_enabled": cfg.breakeven.enabled,
+                "be_trigger_mode": cfg.breakeven.trigger_mode,
                 "be_trigger_rr": cfg.breakeven.trigger_rr,
+                "be_trigger_atr_mult": cfg.breakeven.trigger_atr_mult,
                 "be_buffer_pct": cfg.breakeven.buffer_pct,
                 "trail_enabled": cfg.trailing.enabled,
+                "trail_mode": cfg.trailing.mode,
                 "trail_pct": cfg.trailing.percent_pct,
+                "trail_atr_mult": cfg.trailing.atr_multiplier,
                 "trail_step_pct": cfg.trailing.update_step_pct,
+                "atr_period": cfg.atr.period,
+                "atr_method": cfg.atr.method,
             },
         }
 

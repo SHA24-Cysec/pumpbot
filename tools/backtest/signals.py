@@ -32,6 +32,7 @@ from bot.signal_engine.detectors import (
     PriceActionDetector,
     VolumeDetector,
 )
+from bot.signal_engine.change24h import Change24hFilter
 from bot.signal_engine.vwap import VWAPFilter
 from bot.utils import clamp
 
@@ -232,6 +233,8 @@ def scan_symbol(symbol: str, candles: list[Candle], cfg: Config,
     manip_det = ManipulationDetector()
     # Satu instance per pemanggilan supaya cache tidak bocor antar varian config.
     vwap_filter = VWAPFilter() if cfg.signal.vwap.enabled else None
+    band_filter = (Change24hFilter()
+                   if cfg.signal.change_24h.enabled else None)
 
     buf = SymbolBuffer(symbol, max_candles=_buffer_cap(cfg))
     rolling = RollingTicker(symbol, candles, interval_min)
@@ -273,6 +276,14 @@ def scan_symbol(symbol: str, candles: list[Candle], cfg: Config,
         # buf.last_price sudah = close candle i (di-set on_candle), jadi
         # keputusan memakai harga yang sama seperti jalur live.
         if vwap_filter is not None and not vwap_filter.score(buf, cfg).eligible:
+            continue
+
+        # Gate band perubahan 24 jam (nilai absolut): kelas filter yang SAMA
+        # dengan jalur live, sehingga koin yang lolos di backtest sama dengan
+        # koin yang lolos di bot.
+        # buf.ticker sudah di-set di atas (ticker 24 jam sintetis dari candle),
+        # jadi angkanya setara priceChangePercent Binance tanpa lookahead.
+        if band_filter is not None and not band_filter.score(buf, cfg).eligible:
             continue
 
         nxt = candles[i + 1]

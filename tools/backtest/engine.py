@@ -19,6 +19,22 @@ Urutan breakeven lalu trailing meniru PositionManager: trailing hanya aktif
 setelah breakeven terpicu, trailing monoton naik, dan stop baru hanya
 dipublikasikan bila kenaikannya memenuhi update_step_pct.
 
+DUA BASIS EXIT (`Params.basis`):
+
+  percent : jarak SL = persen tetap, TP = kelipatan risiko (R), trailing
+            persen. Ini perilaku versi sebelumnya, tetap didukung penuh.
+  atr     : SL = sl_atr x ATR, TP = tp_atr x ATR, pemicu BE = be_atr x ATR,
+            trailing = trail_atr x ATR. Semua `x ATR` memakai SATU nilai ATR
+            yang dihitung dari candle SEBELUM candle entry dan DIBEKUKAN
+            untuk seluruh umur trade, persis seperti bot yang menyimpan
+            Position.atr_entry saat entry.
+
+ATR dihitung dari `candles[:entry_idx]`, yaitu hanya candle yang sudah CLOSE
+sebelum entry. Candle entry sendiri (dan sesudahnya) tidak dipakai, jadi tidak
+ada kebocoran informasi ke belakang. Bila candle sebelum entry kurang dari
+atr_period + 1, trade BASIS ATR DILEWATI (return None) alih-alih memakai ATR
+0.0 yang akan menghasilkan stop tak masuk akal.
+
 ASUMSI: filter LOT_SIZE dan MIN_NOTIONAL diabaikan (qty dianggap bisa pecahan
 apa pun), dan tidak ada partial fill.
 """
@@ -30,14 +46,16 @@ from typing import Optional
 
 from bot.config import Config
 from bot.models import Candle
+from bot.risk_management.atr import compute_atr
 from bot.risk_management.sizing import clamp_to_available_balance, compute_raw_qty
 from bot.risk_management.stops import (
     breakeven_price,
     initial_stop,
-    should_trigger_breakeven,
+    should_trigger_be,
     should_update_exit_order,
     take_profit_levels,
     update_trailing,
+    update_trailing_atr,
 )
 
 from tools.backtest.signals import Entry
@@ -45,22 +63,44 @@ from tools.backtest.signals import Entry
 
 @dataclass(frozen=True)
 class Params:
-    """Satu kombinasi parameter exit yang diuji."""
+    """
+    Satu kombinasi parameter exit yang diuji.
+
+    Kolom percent dan kolom ATR berdampingan: yang dipakai ditentukan oleh
+    `basis`, sehingga satu tabel hasil bisa membandingkan keduanya pada data
+    dan himpunan entry yang sama.
+    """
     sl_pct: float
     tp_rr: float
-    be_rr: float = 0.0            # 0 = breakeven mati
+    be_rr: float = 0.0            # 0 = breakeven mati (basis percent)
     be_buffer_pct: float = 0.25
-    trail_pct: float = 0.0        # 0 = trailing mati
+    trail_pct: float = 0.0        # 0 = trailing mati (basis percent)
     trail_step_pct: float = 0.15
     fee_pct: float = 0.1
     slippage_pct: float = 0.0
     cooldown_min: Optional[float] = None   # None = pakai nilai config
+    # --- basis ATR (dipakai bila basis == "atr") ---
+    basis: str = "percent"        # percent | atr
+    sl_atr: float = 1.5           # jarak SL = sl_atr x ATR
+    tp_atr: float = 3.0           # jarak TP = tp_atr x ATR
+    be_atr: float = 1.5           # pemicu BE = be_atr x ATR (0 = mati)
+    trail_atr: float = 2.0        # jarak trailing = trail_atr x ATR (0 = mati)
+    atr_period: int = 14
+    atr_method: str = "wilder"    # wilder | sma
 
     def key(self) -> tuple:
-        """Kunci unik untuk deduplikasi grid."""
-        return (self.sl_pct, self.tp_rr, self.be_rr, self.be_buffer_pct,
-                self.trail_pct, self.trail_step_pct, self.fee_pct,
-                self.slippage_pct, self.cooldown_min)
+        """
+        Kunci unik untuk deduplikasi grid dan pencocokan hasil OOS.
+
+        Basis ikut masuk kunci: kombinasi percent dan ATR yang angkanya
+        kebetulan sama adalah dua strategi berbeda dan tidak boleh saling
+        menimpa di peta hasil.
+        """
+        return (self.basis, self.sl_pct, self.tp_rr, self.be_rr,
+                self.be_buffer_pct, self.trail_pct, self.trail_step_pct,
+                self.fee_pct, self.slippage_pct, self.cooldown_min,
+                self.sl_atr, self.tp_atr, self.be_atr, self.trail_atr,
+                self.atr_period, self.atr_method)
 
 
 @dataclass
@@ -79,6 +119,7 @@ class TradeResult:
     qty: float = 0.0
     pnl: float = 0.0
     r_multiple: float = 0.0
+    atr: float = 0.0     # ATR beku trade ini (0.0 = basis percent)
 
 
 def simulate_trade(candles: list[Candle], entry_idx: int, params: Params,
@@ -96,21 +137,45 @@ def simulate_trade(candles: list[Candle], entry_idx: int, params: Params,
     if entry <= 0:
         return None
 
+    basis_atr = (params.basis == "atr")
+
+    # ATR hanya dari candle yang sudah CLOSE sebelum candle entry, lalu
+    # dibekukan (tidak pernah dihitung ulang di tengah trade).
+    atr_val = 0.0
+    if basis_atr:
+        atr_val = compute_atr(candles[:entry_idx], params.atr_period,
+                              params.atr_method)
+        if atr_val <= 0:
+            # Candle historis belum cukup untuk ATR: lewati, jangan pakai
+            # angka 0.0 yang membuat stop menempel di entry.
+            return None
+
     stop0 = initial_stop(
         entry=entry,
         swing_low=None,
-        mode="percent",
-        percent_pct=params.sl_pct,
+        mode="atr" if basis_atr else "percent",
+        percent_pct=(params.sl_pct if not basis_atr
+                     else cfg.stops.percent_pct),
         min_stop_pct=cfg.stops.min_stop_pct,
         max_stop_pct=cfg.stops.max_stop_pct,
+        atr=atr_val,
+        atr_multiplier=params.sl_atr,
+        atr_min_multiplier=cfg.stops.atr_min_multiplier,
+        atr_max_multiplier=cfg.stops.atr_max_multiplier,
     )
     if stop0 <= 0 or stop0 >= entry:
         return None
 
-    levels = take_profit_levels(entry, stop0, "rr", params.tp_rr, [])
+    # TP memakai fungsi yang sama dengan bot live: basis ATR lewat mode "atr"
+    # (satu target, porsi 100%), basis persen lewat mode "rr" seperti semula.
+    levels = take_profit_levels(
+        entry, stop0, "atr" if basis_atr else "rr", params.tp_rr, [],
+        atr=atr_val, atr_multiplier=params.tp_atr)
     if not levels:
         return None
     tp = float(levels[0]["price"])
+    if tp <= entry:
+        return None
 
     stop = stop0
     highest = entry
@@ -141,10 +206,15 @@ def simulate_trade(candles: list[Candle], entry_idx: int, params: Params,
         # c) pembaruan stop untuk candle BERIKUTNYA
         highest = max(highest, c.high)
 
-        if params.be_rr > 0 and not be_done:
-            if should_trigger_breakeven(price=highest, entry=entry,
-                                        initial_stop=stop0,
-                                        trigger_rr=params.be_rr):
+        # Pemicu BE: basis ATR memakai be_atr x ATR, basis percent memakai
+        # be_rr x jarak SL awal. Nilai ATR-nya tetap yang dibekukan di awal.
+        be_on = (params.be_atr > 0) if basis_atr else (params.be_rr > 0)
+        if be_on and not be_done:
+            if should_trigger_be(price=highest, entry=entry,
+                                 initial_stop=stop0,
+                                 mode="atr" if basis_atr else "rr",
+                                 trigger_rr=params.be_rr, atr=atr_val,
+                                 trigger_atr_mult=params.be_atr):
                 new_sl = breakeven_price(entry, params.be_buffer_pct,
                                          params.fee_pct)
                 if new_sl > stop:
@@ -152,13 +222,20 @@ def simulate_trade(candles: list[Candle], entry_idx: int, params: Params,
                 be_done = True
 
         # Trailing hanya boleh aktif setelah breakeven (sama seperti bot).
-        if params.trail_pct > 0 and be_done:
+        trail_cfg_on = (params.trail_atr > 0) if basis_atr else (params.trail_pct > 0)
+        if trail_cfg_on and be_done:
             trail_on = True
         if trail_on:
-            new_sl = update_trailing(
-                current_sl=stop, highest=highest,
-                percent_pct=params.trail_pct,
-            )
+            if basis_atr:
+                new_sl = update_trailing_atr(
+                    current_sl=stop, highest=highest, atr=atr_val,
+                    multiplier=params.trail_atr,
+                )
+            else:
+                new_sl = update_trailing(
+                    current_sl=stop, highest=highest,
+                    percent_pct=params.trail_pct,
+                )
             if should_update_exit_order(stop, new_sl, params.trail_step_pct):
                 stop = new_sl
 
@@ -178,6 +255,7 @@ def simulate_trade(candles: list[Candle], entry_idx: int, params: Params,
         reason=reason,
         exit_idx=exit_idx,
         be_triggered=be_done,
+        atr=atr_val,
     )
 
 

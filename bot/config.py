@@ -18,8 +18,12 @@ from __future__ import annotations
 
 import math
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
+from bot.risk_management.atr import (MAX_PERIOD as ATR_MAX_PERIOD,
+                                     METHODS as ATR_METHODS,
+                                     MIN_PERIOD as ATR_MIN_PERIOD)
 
 import yaml
 
@@ -58,13 +62,40 @@ class DataCfg:
 class ManipulationCfg:
     weight: float = 0.60
     veto_threshold: float = 0.70
-    max_change_24h_pct: float = 20.0
+    # Ambang kenaikan 24 jam (persen, dari ticker 24 jam Binance).
+    # Kenaikan di bawah ambang ini hanya mengurangi skor secara proporsional,
+    # sedangkan kenaikan yang MENYENTUH ambang langsung mendapat komponen
+    # penalti penuh (c1 = 100). Dipilih 10% karena koin yang sudah naik
+    # segitu dalam sehari berisiko dump, sementara koin di kisaran 6-10%
+    # masih punya ruang naik dan tetap bisa lolos bila skor dasarnya kuat.
+    max_change_24h_pct: float = 10.0
     pump_dump_gain_pct: float = 8.0
     pump_dump_pullback_pct: float = 40.0
     pump_dump_window_min: int = 15
     overextended_5m_pct: float = 5.0
     wash_volume_spike: float = 2.0
     wash_range_pct: float = 0.4
+
+
+@dataclass
+class Change24hCfg:
+    """
+    Band perubahan 24 jam sebagai GERBANG ENTRY (bukan penalti skor).
+
+    Hanya koin yang BESAR perubahan 24 jam-nya berada di dalam [min_pct,
+    max_pct] yang boleh masuk. Nilai di bawah min_pct berarti koin terlalu
+    tenang untuk dikejar, sedangkan di atas max_pct berarti pergerakannya
+    terlalu ekstrem: kalau naik berisiko beli di puncak, kalau turun itu pisau
+    jatuh. Jadi koin yang turun 6 sampai 10% ikut lolos, koin yang turun lebih
+    dalam dari max_pct ditolak.
+
+    Angka dibaca dari ticker 24 jam Binance (priceChangePercent) dan diuji
+    dengan NILAI ABSOLUT, sama seperti ManipulationDetector. Batas kedua ujung
+    inklusif.
+    """
+    enabled: bool = True
+    min_pct: float = 6.0
+    max_pct: float = 10.0
 
 
 @dataclass
@@ -148,6 +179,7 @@ class SignalCfg:
     whale: WhaleCfg = field(default_factory=WhaleCfg)
     price_action: PriceActionCfg = field(default_factory=PriceActionCfg)
     vwap: VWAPCfg = field(default_factory=VWAPCfg)
+    change_24h: Change24hCfg = field(default_factory=Change24hCfg)
 
 
 @dataclass
@@ -165,11 +197,42 @@ class RiskCfg:
 
 
 @dataclass
+class AtrCfg:
+    """
+    Parameter Average True Range (ATR) yang dipakai bersama SL, TP, BE, dan
+    trailing.
+
+    ATR dihitung dari candle TERTUTUP pada interval `data.kline_interval`,
+    memakai rumus Wilder (lihat bot/risk_management/atr.py). Satu nilai ATR
+    diambil saat entry dan DIBEKUKAN untuk seluruh umur posisi, jadi SL/TP/BE
+    sebuah posisi tidak berubah hanya karena volatilitas bergerak.
+
+    `period` juga menentukan jumlah candle minimum: ATR butuh period + 1
+    candle tertutup. Dengan period 14 dan data.history_candles 120, syarat
+    itu selalu terpenuhi setelah seed REST.
+    """
+    period: int = 14
+    method: str = "wilder"          # wilder (RMA) | sma
+
+
+@dataclass
 class StopsCfg:
-    mode: str = "percent"
+    mode: str = "atr"               # structure | percent | atr
     percent_pct: float = 1.0
+    # Jarak SL saat mode 'atr': entry - (atr_multiplier x ATR). Nilai ini
+    # juga menjadi pembanding saat mode 'atr' jatuh ke fallback percent.
+    atr_multiplier: float = 1.5
+    # Pengaman khusus mode atr, dalam satuan ATR (bukan persen). Kelipatan
+    # efektif dijepit ke rentang ini. Sengaja tidak memakai min_stop_pct:
+    # pada koin bervolatilitas rendah, batas persen 0,5% menimpa jarak ATR
+    # yang sah (mis. 0,077% pada BTC) sehingga TP berbasis ATR bisa berakhir
+    # lebih dekat daripada SL.
+    atr_min_multiplier: float = 0.5
+    atr_max_multiplier: float = 4.0
     structure_buffer_pct: float = 0.15
+    # Batas atas mutlak: tetap berlaku di mode atr sebagai pengaman risiko.
     max_stop_pct: float = 4.0
+    # min_stop_pct hanya berlaku untuk mode percent/structure.
     min_stop_pct: float = 0.5
 
 
@@ -182,16 +245,26 @@ class TPTarget:
 @dataclass
 class TakeProfitCfg:
     # Default satu TP 2R: SL 1% menghasilkan TP 2%.
-    mode: str = "rr"               # rr | multi | single (mode lama tetap didukung)
+    mode: str = "atr"              # rr | multi | single | atr
     rr: float = 2.0
+    # Jarak TP saat mode 'atr': entry + (atr_multiplier x ATR). Dengan SL
+    # 1.5 x ATR dan TP 3 x ATR, imbal rasio 1:2 terjaga berapa pun ATR-nya.
+    atr_multiplier: float = 3.0
     targets: list = field(default_factory=lambda: [TPTarget(2.0, 100)])
 
 
 @dataclass
 class BreakevenCfg:
     enabled: bool = True
+    # auto -> ikut basis SL (stops.mode): SL ATR maka BE ikut ATR.
+    # rr   -> pemicu entry + trigger_rr x jarak SL awal (1R).
+    # atr  -> pemicu entry + trigger_atr_mult x ATR.
+    trigger_mode: str = "auto"
     # BE dipicu pada 1R: entry + trigger_rr x (entry - initial_stop).
     trigger_rr: float = 1.0
+    # Pemicu BE saat trigger_mode atr. 1.5 x ATR sama dengan 1R bila SL
+    # dipasang 1.5 x ATR, sehingga BE tetap "bebas risiko di 1R".
+    trigger_atr_mult: float = 1.5
     # Buffer minimal 2x fee tetap diberlakukan agar BE tidak rugi karena fee.
     buffer_pct: float = 0.25
 
@@ -199,10 +272,12 @@ class BreakevenCfg:
 @dataclass
 class TrailingCfg:
     enabled: bool = True
-    # Default: setelah BE aktif, SL mengikuti harga tertinggi dengan jarak 0,5%.
-    # (Mode ATR trailing dihapus dari bot; kunci lama mode/atr_period/
-    #  atr_multiplier ditolak saat load agar config basi tidak lolos diam-diam.)
+    # percent -> SL = highest x (1 - percent_pct%), seperti sebelumnya.
+    # atr     -> SL = highest - (atr_multiplier x ATR), ATR dibekukan saat
+    #            entry supaya level tidak bergerak karena volatilitas saja.
+    mode: str = "atr"              # percent | atr
     percent_pct: float = 0.5
+    atr_multiplier: float = 2.0
     update_step_pct: float = 0.15
 
 
@@ -292,6 +367,7 @@ class Config:
     quote_asset: str = "USDT"
     universe: UniverseCfg = field(default_factory=UniverseCfg)
     data: DataCfg = field(default_factory=DataCfg)
+    atr: AtrCfg = field(default_factory=AtrCfg)
     signal: SignalCfg = field(default_factory=SignalCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
     stops: StopsCfg = field(default_factory=StopsCfg)
@@ -316,7 +392,8 @@ class Config:
 # ---------------------------------------------------------------------------
 
 _SUBDATACLASS_FIELDS = {
-    "universe": UniverseCfg, "data": DataCfg, "signal": SignalCfg,
+    "universe": UniverseCfg, "data": DataCfg, "atr": AtrCfg,
+    "signal": SignalCfg,
     "risk": RiskCfg, "stops": StopsCfg, "take_profit": TakeProfitCfg,
     "breakeven": BreakevenCfg, "trailing": TrailingCfg,
     "execution": ExecutionCfg, "dashboard": DashboardCfg,
@@ -332,6 +409,7 @@ _NESTED = {
     ("signal", "whale"): WhaleCfg,
     ("signal", "price_action"): PriceActionCfg,
     ("signal", "vwap"): VWAPCfg,
+    ("signal", "change_24h"): Change24hCfg,
 }
 
 
@@ -389,28 +467,6 @@ def load_config(path: str) -> Config:
     with open(path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
 
-    # Kunci trailing yang sudah DIHAPUS bersama fitur ATR trailing.
-    # _build() memang mengabaikan kunci tak dikenal secara diam-diam, tetapi
-    # untuk kunci yang sengaja dipensiunkan itu berbahaya: pengguna bisa
-    # berpikir trailing ATR-nya masih aktif padahal tidak. Maka ditolak
-    # eksplisit dengan pesan cara memperbaikinya.
-    _REMOVED_TRAILING_KEYS = {
-        "mode": "trailing.mode",
-        "atr_period": "trailing.atr_period",
-        "atr_multiplier": "trailing.atr_multiplier",
-    }
-    trailing_raw = raw.get("trailing")
-    if isinstance(trailing_raw, dict):
-        for k, label in _REMOVED_TRAILING_KEYS.items():
-            if k in trailing_raw:
-                raise ConfigError(
-                    f"Kunci '{label}' sudah tidak dipakai: fitur ATR trailing "
-                    f"dihapus dari bot. Hapus baris tersebut dari config.yaml. "
-                    f"Trailing sekarang hanya diatur lewat trailing.enabled, "
-                    f"trailing.percent_pct, dan trailing.update_step_pct "
-                    f"(jarak persen dari harga tertinggi)."
-                )
-
     cfg = Config()
     for key, value in raw.items():
         if key in _SUBDATACLASS_FIELDS:
@@ -425,6 +481,37 @@ def load_config(path: str) -> Config:
         parent_raw = raw.get(section) or {}
         if isinstance(parent_raw, dict) and sub in parent_raw:
             setattr(getattr(cfg, section), sub, _build(cls, parent_raw[sub]))
+
+    # Kunci lama fitur ATR: sebelum ATR dihidupkan kembali, fitur ini pernah
+    # dihapus dan kuncinya ditolak keras. Sekarang `trailing.mode` dan
+    # `trailing.atr_multiplier` kembali SAH (lihat TrailingCfg), sedangkan
+    # `trailing.atr_period` dipindahkan ke section `atr.period` karena satu
+    # nilai periode kini dipakai bersama SL, TP, BE, dan trailing. Kunci lama
+    # tetap diterima sebagai alias agar config versi sebelumnya tidak mati,
+    # dengan peringatan supaya dipindahkan.
+    _LEGACY_TRAILING_ATR_PERIOD = "atr_period"
+    trailing_raw = raw.get("trailing")
+    atr_raw = raw.get("atr") or {}
+    legacy_atr_period = (trailing_raw.get(_LEGACY_TRAILING_ATR_PERIOD)
+                         if isinstance(trailing_raw, dict) else None)
+    if legacy_atr_period is not None:
+        if isinstance(atr_raw, dict) and "period" in atr_raw:
+            warnings.warn(
+                "config: 'trailing.atr_period' diabaikan karena 'atr.period' "
+                "sudah diisi. Hapus kunci lama itu dari config.yaml.",
+                UserWarning, stacklevel=2)
+        else:
+            try:
+                cfg.atr.period = int(legacy_atr_period)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"trailing.atr_period harus bilangan bulat (dapat: "
+                    f"{legacy_atr_period!r})") from exc
+            warnings.warn(
+                "config: 'trailing.atr_period' kini bernama 'atr.period' "
+                "(satu periode ATR dipakai SL, TP, BE, dan trailing). "
+                "Nilainya tetap dipakai, tapi pindahkan kuncinya.",
+                UserWarning, stacklevel=2)
 
     # Normalisasi daftar target TP -> list[TPTarget]
     tp_raw = raw.get("take_profit") or {}
@@ -578,6 +665,37 @@ def validate(cfg: Config) -> list[str]:
         errors.append("signal.manipulation.weight harus di rentang 0..1")
     if not 0 <= m.veto_threshold <= 1:
         errors.append("signal.manipulation.veto_threshold harus di rentang 0..1")
+    c24 = s.change_24h
+    if not isinstance(c24.enabled, bool):
+        errors.append("signal.change_24h.enabled harus true/false")
+    try:
+        min_pct = float(c24.min_pct)
+        max_pct = float(c24.max_pct)
+    except (TypeError, ValueError):
+        errors.append("signal.change_24h.min_pct/max_pct harus angka")
+    else:
+        if not math.isfinite(min_pct) or not math.isfinite(max_pct):
+            errors.append("signal.change_24h.min_pct/max_pct harus angka hingga")
+        else:
+            if min_pct < 0:
+                errors.append(
+                    "signal.change_24h.min_pct tidak boleh negatif: band ini "
+                    "mengukur BESAR pergerakan (nilai absolut), jadi batas "
+                    "bawah negatif tidak punya arti")
+            if min_pct > max_pct:
+                errors.append(
+                    f"signal.change_24h.min_pct ({min_pct:g}) tidak boleh lebih "
+                    f"besar dari max_pct ({max_pct:g})")
+            if c24.enabled and max_pct <= 0:
+                errors.append(
+                    "signal.change_24h.max_pct harus > 0 selama gate aktif: "
+                    "band nol membuat SEMUA koin ditolak")
+
+    if m.max_change_24h_pct <= 0:
+        errors.append(
+            "signal.manipulation.max_change_24h_pct harus > 0: nilai ini "
+            "adalah ambang kenaikan 24 jam, dan nilai nol atau negatif "
+            "membuat semua koin dianggap sudah naik terlalu jauh")
     if m.pump_dump_gain_pct <= 0 or m.pump_dump_window_min < 1:
         errors.append("signal.manipulation.pump_dump_* tidak valid")
     if m.wash_volume_spike < 1:
@@ -668,10 +786,19 @@ def validate(cfg: Config) -> list[str]:
 
     # --- stops ---
     st = cfg.stops
-    if st.mode not in ("structure", "percent"):
-        errors.append("stops.mode harus 'structure' atau 'percent'")
+    if st.mode not in ("structure", "percent", "atr"):
+        errors.append("stops.mode harus 'structure', 'percent', atau 'atr'")
     if not 0.1 <= st.percent_pct <= 20:
         errors.append("stops.percent_pct harus di rentang 0.1..20 persen")
+    if not 0.05 <= st.atr_multiplier <= 100:
+        errors.append("stops.atr_multiplier harus di rentang 0.05..100")
+    if not 0.05 <= st.atr_min_multiplier <= 100:
+        errors.append("stops.atr_min_multiplier harus di rentang 0.05..100")
+    if not 0.05 <= st.atr_max_multiplier <= 100:
+        errors.append("stops.atr_max_multiplier harus di rentang 0.05..100")
+    if not st.atr_min_multiplier <= st.atr_max_multiplier:
+        errors.append(
+            "stops.atr_min_multiplier harus <= stops.atr_max_multiplier")
     if not 0 <= st.structure_buffer_pct <= 5:
         errors.append("stops.structure_buffer_pct harus di rentang 0..5 persen")
     if not st.min_stop_pct <= st.max_stop_pct:
@@ -679,10 +806,29 @@ def validate(cfg: Config) -> list[str]:
     if not 0.1 <= st.max_stop_pct <= 20:
         errors.append("stops.max_stop_pct harus di rentang 0.1..20 persen")
 
+    # --- ATR (dipakai bersama SL, TP, BE, dan trailing) ---
+    a = cfg.atr
+    if (isinstance(a.period, bool) or not isinstance(a.period, int)
+            or not ATR_MIN_PERIOD <= a.period <= ATR_MAX_PERIOD):
+        errors.append(
+            f"atr.period harus bilangan bulat di rentang "
+            f"{ATR_MIN_PERIOD}..{ATR_MAX_PERIOD}")
+    if a.method not in ATR_METHODS:
+        errors.append(
+            f"atr.method harus salah satu dari {', '.join(ATR_METHODS)}")
+    if (isinstance(a.period, int) and not isinstance(a.period, bool)
+            and a.period + 1 > cfg.data.history_candles):
+        errors.append(
+            f"atr.period + 1 ({a.period + 1}) tidak boleh melebihi "
+            f"data.history_candles ({cfg.data.history_candles}): buffer candle "
+            f"tidak cukup untuk menghitung ATR")
+
     # --- take profit ---
     tp = cfg.take_profit
-    if tp.mode not in ("multi", "rr", "single"):
-        errors.append("take_profit.mode harus 'multi', 'rr', atau 'single'")
+    if tp.mode not in ("multi", "rr", "single", "atr"):
+        errors.append("take_profit.mode harus 'multi', 'rr', 'single', atau 'atr'")
+    if not 0.05 <= tp.atr_multiplier <= 100:
+        errors.append("take_profit.atr_multiplier harus di rentang 0.05..100")
     if tp.mode == "rr" and tp.rr <= 0:
         errors.append("take_profit.rr harus > 0")
     if tp.mode in ("multi", "single"):
@@ -703,14 +849,22 @@ def validate(cfg: Config) -> list[str]:
 
     # --- breakeven & trailing ---
     b = cfg.breakeven
+    if b.trigger_mode not in ("auto", "rr", "atr"):
+        errors.append("breakeven.trigger_mode harus 'auto', 'rr', atau 'atr'")
     if b.trigger_rr <= 0:
         errors.append("breakeven.trigger_rr harus > 0")
+    if not 0.05 <= b.trigger_atr_mult <= 100:
+        errors.append("breakeven.trigger_atr_mult harus di rentang 0.05..100")
     if not 0 <= b.buffer_pct <= 2:
         errors.append("breakeven.buffer_pct harus di rentang 0..2 persen")
 
     t = cfg.trailing
+    if t.mode not in ("percent", "atr"):
+        errors.append("trailing.mode harus 'percent' atau 'atr'")
     if not 0.1 <= t.percent_pct <= 20:
         errors.append("trailing.percent_pct harus di rentang 0.1..20 persen")
+    if not 0.05 <= t.atr_multiplier <= 100:
+        errors.append("trailing.atr_multiplier harus di rentang 0.05..100")
     if t.update_step_pct <= 0:
         errors.append("trailing.update_step_pct harus > 0")
 

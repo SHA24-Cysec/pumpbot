@@ -47,6 +47,12 @@ from tools.backtest.download import (
 )
 from tools.backtest.engine import Params, simulate_portfolio
 from tools.backtest.optimize import (
+    DEFAULT_ATR_BE,
+    DEFAULT_ATR_METHOD,
+    DEFAULT_ATR_PERIOD,
+    DEFAULT_ATR_SL,
+    DEFAULT_ATR_TP,
+    DEFAULT_ATR_TRAIL,
     DEFAULT_BE_BUFFER,
     DEFAULT_BE_RR,
     DEFAULT_SL,
@@ -314,6 +320,15 @@ class JobRequest:
     trail: list[float] = field(default_factory=lambda: list(DEFAULT_TRAIL))
     cooldown: list[float] = field(default_factory=list)
 
+    # basis exit + grid ATR (kelipatan ATR, bukan persen)
+    basis: str = "both"           # percent | atr | both
+    atr_sl: list[float] = field(default_factory=lambda: list(DEFAULT_ATR_SL))
+    atr_tp: list[float] = field(default_factory=lambda: list(DEFAULT_ATR_TP))
+    atr_be: list[float] = field(default_factory=lambda: list(DEFAULT_ATR_BE))
+    atr_trail: list[float] = field(default_factory=lambda: list(DEFAULT_ATR_TRAIL))
+    atr_period: int = DEFAULT_ATR_PERIOD
+    atr_method: str = DEFAULT_ATR_METHOD
+
     # grid sinyal
     thr: list[float] = field(default_factory=list)
     wpa: list[float] = field(default_factory=list)
@@ -325,6 +340,7 @@ class JobRequest:
     min_candles: list[int] = field(default_factory=list)
 
     vwap: str = "config"
+    change24h: str = "config"     # config | on | off (gate band perubahan 24 jam)
     config: str = os.path.join("config", "config.yaml")
     results: str = DEFAULT_RESULTS
 
@@ -388,6 +404,22 @@ class JobRequest:
         req.trail = _as_float_list(raw.get("trail"), DEFAULT_TRAIL)
         req.cooldown = _as_float_list(raw.get("cooldown"), [])
 
+        basis = str(raw.get("basis") or "both").lower()
+        if basis not in ("percent", "atr", "both"):
+            raise ValueError(
+                f"'basis' harus 'percent', 'atr', atau 'both', dapat: {basis}")
+        req.basis = basis
+        req.atr_sl = _as_float_list(raw.get("atr_sl"), DEFAULT_ATR_SL)
+        req.atr_tp = _as_float_list(raw.get("atr_tp"), DEFAULT_ATR_TP)
+        req.atr_be = _as_float_list(raw.get("atr_be"), DEFAULT_ATR_BE)
+        req.atr_trail = _as_float_list(raw.get("atr_trail"), DEFAULT_ATR_TRAIL)
+        req.atr_period = _int_wajib(raw, "atr_period", DEFAULT_ATR_PERIOD, 2)
+        method = str(raw.get("atr_method") or DEFAULT_ATR_METHOD).lower()
+        if method not in ("wilder", "sma"):
+            raise ValueError(
+                f"'atr_method' harus 'wilder' atau 'sma', dapat: {method}")
+        req.atr_method = method
+
         req.thr = _as_float_list(raw.get("thr"), [])
         req.wpa = _as_float_list(raw.get("wpa"), [])
         req.ma_period = _as_int_list(raw.get("ma_period"), [])
@@ -401,6 +433,11 @@ class JobRequest:
         if vwap not in ("config", "on", "off"):
             raise ValueError("vwap harus salah satu dari: config, on, off")
         req.vwap = vwap
+
+        band = str(raw.get("change24h") or "config").lower()
+        if band not in ("config", "on", "off"):
+            raise ValueError("change24h harus salah satu dari: config, on, off")
+        req.change24h = band
 
         req.config = str(raw.get("config") or req.config)
         req.results = str(raw.get("results") or DEFAULT_RESULTS)
@@ -442,24 +479,16 @@ def apply_payload(p: Params, sp: SignalParams, cfg) -> dict:
                 memakai lima detector, jadi threshold dan bobot hasil backtest
                 tidak bisa dipindahkan mentah-mentah.
     """
-    be_on = p.be_rr > 0
-    tr_on = p.trail_pct > 0
-    return {
-        "exit": {
-            "stops.mode": "percent",
-            "stops.percent_pct": p.sl_pct,
-            "take_profit.mode": "rr",
-            "take_profit.rr": p.tp_rr,
-            "breakeven.enabled": be_on,
-            "breakeven.trigger_rr": (p.be_rr if be_on
-                                     else cfg.breakeven.trigger_rr),
-            "breakeven.buffer_pct": (p.be_buffer_pct if be_on
-                                     else cfg.breakeven.buffer_pct),
-            "trailing.enabled": tr_on,
-            "trailing.percent_pct": (p.trail_pct if tr_on
-                                     else cfg.trailing.percent_pct),
-            "trailing.update_step_pct": p.trail_step_pct,
-        },
+    #
+    # Basis ikut ditulis lengkap (mode + satuan), bukan cuma angkanya: kalau
+    # hanya angka yang ditulis, config bisa berakhir campur basis (mis. mode
+    # ATR dengan angka hasil optimasi persen) dan hasilnya berbeda jauh dari
+    # yang diuji. `breakeven.trigger_mode` dan `trailing.mode` sengaja selalu
+    # ditulis supaya baris basis percent tidak mewarisi basis ATR dari config.
+    # Kelompok lookback/scoring/cooldown sama untuk kedua basis, jadi hanya
+    # ditulis sekali: kalau disalin dua kali, suatu saat salah satunya lupa
+    # ikut diperbarui dan hasil "Terapkan" jadi berbeda antar basis.
+    common = {
         "lookback": {
             "signal.volume.ma_period": sp.ma_period,
             "signal.volume.spike_scale": sp.spike_scale,
@@ -475,6 +504,55 @@ def apply_payload(p: Params, sp: SignalParams, cfg) -> dict:
         },
         "cooldown": ({"signal.cooldown_after_exit_min": p.cooldown_min}
                      if p.cooldown_min is not None else {}),
+    }
+
+    if p.basis == "atr":
+        be_atr_on = p.be_atr > 0 and p.be_atr < p.tp_atr
+        tr_atr_on = be_atr_on and p.trail_atr > 0
+        return {
+            "exit": {
+                "atr.period": int(p.atr_period),
+                "atr.method": p.atr_method,
+                "stops.mode": "atr",
+                "stops.atr_multiplier": p.sl_atr,
+                "take_profit.mode": "atr",
+                "take_profit.atr_multiplier": p.tp_atr,
+                "breakeven.enabled": be_atr_on,
+                "breakeven.trigger_mode": "atr",
+                "breakeven.trigger_atr_mult": (
+                    p.be_atr if be_atr_on else cfg.breakeven.trigger_atr_mult),
+                "breakeven.buffer_pct": (p.be_buffer_pct if be_atr_on
+                                         else cfg.breakeven.buffer_pct),
+                "trailing.enabled": tr_atr_on,
+                "trailing.mode": "atr",
+                "trailing.atr_multiplier": (
+                    p.trail_atr if tr_atr_on else cfg.trailing.atr_multiplier),
+                "trailing.update_step_pct": p.trail_step_pct,
+            },
+            **common,
+        }
+
+    be_on = p.be_rr > 0
+    tr_on = p.trail_pct > 0
+    return {
+        "exit": {
+            "stops.mode": "percent",
+            "stops.percent_pct": p.sl_pct,
+            "take_profit.mode": "rr",
+            "take_profit.rr": p.tp_rr,
+            "breakeven.enabled": be_on,
+            "breakeven.trigger_mode": "rr",
+            "breakeven.trigger_rr": (p.be_rr if be_on
+                                     else cfg.breakeven.trigger_rr),
+            "breakeven.buffer_pct": (p.be_buffer_pct if be_on
+                                     else cfg.breakeven.buffer_pct),
+            "trailing.enabled": tr_on,
+            "trailing.mode": "percent",
+            "trailing.percent_pct": (p.trail_pct if tr_on
+                                     else cfg.trailing.percent_pct),
+            "trailing.update_step_pct": p.trail_step_pct,
+        },
+        **common,
     }
 
 
@@ -498,11 +576,19 @@ def row_payload(rank: int, r: dict, oos_map: dict, cfg) -> dict:
             "label": sp.label(),
         },
         "exit": {
+            "basis": p.basis,
             "sl_pct": p.sl_pct,
             "tp_rr": p.tp_rr,
             "be_rr": p.be_rr,
             "be_buffer_pct": p.be_buffer_pct,
             "trail_pct": p.trail_pct,
+            # kolom ATR (bermakna bila basis = "atr")
+            "sl_atr": p.sl_atr,
+            "tp_atr": p.tp_atr,
+            "be_atr": p.be_atr,
+            "trail_atr": p.trail_atr,
+            "atr_period": p.atr_period,
+            "atr_method": p.atr_method,
             "trail_step_pct": p.trail_step_pct,
             "fee_pct": p.fee_pct,
             "cooldown_min": p.cooldown_min,
@@ -584,6 +670,11 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
     elif req.vwap == "off":
         cfg.signal.vwap.enabled = False
 
+    if req.change24h == "on":
+        cfg.signal.change_24h.enabled = True
+    elif req.change24h == "off":
+        cfg.signal.change_24h.enabled = False
+
     signal_grid = build_signal_grid(
         cfg,
         req.thr or [cfg.signal.score_threshold],
@@ -600,9 +691,20 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
                          "Pastikan rasio bobot price action ada di antara "
                          "0 dan 1.")
 
-    exit_grid = build_grid(
-        cfg, req.sl, req.tp, req.be, req.be_buffer, req.trail,
-        cooldown_list=req.cooldown or None)
+    bases = ("percent", "atr") if req.basis == "both" else (req.basis,)
+    exit_grid = []
+    for basis in bases:
+        if basis == "atr":
+            exit_grid.extend(build_grid(
+                cfg, req.sl, req.tp, req.be, req.be_buffer, req.trail,
+                cooldown_list=req.cooldown or None, basis="atr",
+                atr_sl_list=req.atr_sl, atr_tp_list=req.atr_tp,
+                atr_be_list=req.atr_be, atr_trail_list=req.atr_trail,
+                atr_period=req.atr_period, atr_method=req.atr_method))
+        else:
+            exit_grid.extend(build_grid(
+                cfg, req.sl, req.tp, req.be, req.be_buffer, req.trail,
+                cooldown_list=req.cooldown or None, basis="percent"))
     if not exit_grid:
         raise ValueError(
             "Grid exit kosong setelah validasi. Semua nilai SL mungkin di "
@@ -613,7 +715,10 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
     total_rows = len(signal_grid) * len(exit_grid)
     emit("plan", n_signal=len(signal_grid), n_exit=len(exit_grid),
          total=total_rows, symbols=symbols,
-         vwap=bool(cfg.signal.vwap.enabled))
+         vwap=bool(cfg.signal.vwap.enabled),
+         change24h=bool(cfg.signal.change_24h.enabled),
+         change24h_min=cfg.signal.change_24h.min_pct,
+         change24h_max=cfg.signal.change_24h.max_pct)
 
     # ----- Unduh data -----
     if req.download:
@@ -772,7 +877,13 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
                      detail="")
 
     # ----- Simpan dan kirim hasil -----
-    csv_out = write_results_csv(rows, req.results, oos_map)
+    band24_status = (f"AKTIF {cfg.signal.change_24h.min_pct:g}.."
+                     f"{cfg.signal.change_24h.max_pct:g}"
+                     if cfg.signal.change_24h.enabled else "MATI")
+    csv_out = write_results_csv(rows, req.results, oos_map,
+                                vwap_status=("AKTIF" if cfg.signal.vwap.enabled
+                                             else "MATI"),
+                                band24_status=band24_status)
     payload_rows = [row_payload(i, r, oos_map, cfg)
                     for i, r in enumerate(top_rows or rows[: req.top_rows], 1)]
 
@@ -793,12 +904,17 @@ def run_job(req: JobRequest, emit: Emitter) -> int:
              "oos": req.oos,
              "equity": req.equity,
              "vwap_enabled": bool(cfg.signal.vwap.enabled),
+             "change24h_enabled": bool(cfg.signal.change_24h.enabled),
+             "change24h_min_pct": cfg.signal.change_24h.min_pct,
+             "change24h_max_pct": cfg.signal.change_24h.max_pct,
              "elapsed_sec": round(time.time() - t_mulai, 1),
              "not_optimized": [
                  f"stops.mode tetap {cfg.stops.mode} (hanya percent diuji)",
                  "take_profit multi target dan porsi jual parsial",
                  f"trailing.update_step_pct tetap "
                  f"{cfg.trailing.update_step_pct} dari config",
+                 (f"gate band perubahan 24 jam (nilai absolut) "
+                  f"{'AKTIF ' + format(cfg.signal.change_24h.min_pct, 'g') + '..' + format(cfg.signal.change_24h.max_pct, 'g') + '%' if cfg.signal.change_24h.enabled else 'MATI'}"),
                  "LOT_SIZE dan MIN_NOTIONAL diabaikan "
                  "(asumsi qty pecahan bebas)",
              ],
