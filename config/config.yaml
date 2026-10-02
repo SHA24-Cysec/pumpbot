@@ -104,7 +104,7 @@ data:
 signal:
   # Skor gabungan minimum (0-100) sebelum bot boleh entry.
   # 70 = cukup selektif. Turunkan (60) untuk lebih banyak sinyal.
-  score_threshold: 50.0
+  score_threshold: 70.0
 
   # Setelah exit, simbol ini "dinginkan" dulu selama X menit
   # supaya tidak langsung masuk lagi di kondisi yang sama.

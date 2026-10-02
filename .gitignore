@@ -4,6 +4,7 @@
 # database & log
 data/
 logs/
+tests/
 
 # python
 __pycache__/
